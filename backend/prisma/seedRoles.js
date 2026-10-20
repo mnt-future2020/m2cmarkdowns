@@ -106,9 +106,12 @@ async function main() {
                 description: roleData.description,
                 // Respect each role's own flag so editable roles (Manager) aren't
                 // re-locked on re-seed.
-                isSystem: roleData.isSystem === true
+                isSystem: roleData.isSystem === true,
+                // Seeded/system roles are pre-approved — they must never be held
+                // pending (that would make them unassignable and lock out staff).
+                approvalStatus: 'APPROVED'
             },
-            create: roleData
+            create: { ...roleData, approvalStatus: 'APPROVED' }
         });
         console.log(`Upserted role: ${role.name}`);
     }

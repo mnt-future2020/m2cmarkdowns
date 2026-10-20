@@ -174,11 +174,16 @@ const getOverviewReport = async (req, res) => {
         monthlyRevenue.forEach(order => {
             const d = new Date(order.createdAt);
             const key = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
-            if (!monthMap[key]) monthMap[key] = { month: monthNames[d.getMonth()], revenue: 0, orders: 0 };
+            if (!monthMap[key]) monthMap[key] = { month: monthNames[d.getMonth()], sortKey: d.getFullYear() * 12 + d.getMonth(), revenue: 0, orders: 0 };
             monthMap[key].revenue += (order.totalAmountINR || 0);
             monthMap[key].orders += 1;
         });
-        const revenueChartData = Object.values(monthMap).slice(-6);
+        // Sort chronologically before taking the most recent 6 (insertion order is
+        // unreliable since orders aren't pre-sorted).
+        const revenueChartData = Object.values(monthMap)
+            .sort((a, b) => a.sortKey - b.sortKey)
+            .slice(-6)
+            .map(({ sortKey, ...rest }) => rest);
 
         // Order status chart data
         const STATUS_COLORS = {
@@ -712,14 +717,23 @@ const getFinancialReport = async (req, res) => {
         const monthMap = {};
         orders6M.forEach(o => {
             const d = new Date(o.createdAt);
-            const key = `${monthNames[d.getMonth()]}`;
-            if (!monthMap[key]) monthMap[key] = { month: key, revenue: 0, expenses: 0, profit: 0 };
+            // Key by year+month and keep a sort index so buckets stay chronological
+            // and don't collide across a year boundary (e.g. Jan 2025 vs Jan 2026).
+            const sortKey = d.getFullYear() * 12 + d.getMonth();
+            const key = `${d.getFullYear()}-${d.getMonth()}`;
+            if (!monthMap[key]) monthMap[key] = { month: monthNames[d.getMonth()], sortKey, revenue: 0, expenses: 0, profit: 0 };
             if (o.paymentStatus === 'PAID') {
+                // GST is a pass-through liability, not an expense — exclude it from
+                // expenses/profit. (Vendor payout/COGS is not wired here, so this is
+                // revenue net of shipping, not true gross profit.)
                 monthMap[key].revenue += (o.totalAmountINR || 0);
-                monthMap[key].expenses += (o.taxINR || 0) + (o.shippingCostINR || 0);
-                monthMap[key].profit += (o.totalAmountINR || 0) - (o.taxINR || 0) - (o.shippingCostINR || 0);
+                monthMap[key].expenses += (o.shippingCostINR || 0);
+                monthMap[key].profit += (o.totalAmountINR || 0) - (o.shippingCostINR || 0);
             }
         });
+        const monthlyFinancials = Object.values(monthMap)
+            .sort((a, b) => a.sortKey - b.sortKey)
+            .map(({ sortKey, ...rest }) => rest);
 
         const periodOrders = orders6M.filter(o => new Date(o.createdAt) >= start);
         const totalRevenue = periodOrders.filter(o => o.paymentStatus === 'PAID').reduce((s, o) => s + (o.totalAmountINR || 0), 0);
@@ -735,10 +749,11 @@ const getFinancialReport = async (req, res) => {
                     totalTax,
                     totalShipping,
                     totalDiscount,
-                    netRevenue: totalRevenue - totalTax - totalShipping,
+                    // Net of pass-through GST (not subtracted as an expense).
+                    netRevenue: totalRevenue - totalShipping,
                 },
                 charts: {
-                    monthlyFinancials: Object.values(monthMap),
+                    monthlyFinancials,
                 },
             },
         });

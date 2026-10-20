@@ -3009,7 +3009,15 @@ const getPublicProducts = async (req, res) => {
     // Attach the live offer badge (if any) to each product. Additive: products with no
     // matching offer are returned untouched.
     const decorate = await buildOfferDecorator(region);
-    const decoratedItems = products.map(decorate);
+    const decoratedItems = products.map((p) => {
+      const d = decorate(p);
+      // Drop variants not visible in the caller's region (parity with the product
+      // detail endpoint) so out-of-region SKUs/prices/stock don't leak to the list.
+      if (Array.isArray(d.variants)) {
+        d.variants = d.variants.filter((v) => isVisibleInRegion(v.priceVisibility, region));
+      }
+      return d;
+    });
 
     res.json({
       success: true,

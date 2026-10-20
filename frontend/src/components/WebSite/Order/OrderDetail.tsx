@@ -211,6 +211,31 @@ export default function OrderDetail({ orderId }: OrderDetailProps) {
     }
   }
 
+  // .com (USD) orders can't be returned — stash a pre-filled ticket so the
+  // Support tab opens the compose form ready (same as the Order list screen).
+  const stashSupportPrefill = () => {
+    try {
+      const items = (orderDetails?.items || []).map((i: any) => `${i.productName} x${i.quantity}`).join(', ')
+      const ordered = orderDetails?.createdAt ? new Date(orderDetails.createdAt).toLocaleString('en-US', {
+        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+      }) : ''
+      const description = [
+        `Order: ${orderDetails?.orderId || ''}`,
+        ordered ? `Ordered on: ${ordered}` : '',
+        `Status: Delivered`,
+        `Items: ${items}`,
+        '',
+        'I need help with this delivered order:',
+        '',
+      ].filter(Boolean).join('\n')
+      sessionStorage.setItem('m2c_support_prefill', JSON.stringify({
+        subject: `Help with order ${orderDetails?.orderId || ''}`.trim(),
+        category: 'order',
+        description,
+      }))
+    } catch { /* sessionStorage may be unavailable */ }
+  }
+
   useEffect(() => {
     fetchOrder()
   }, [orderId])
@@ -548,6 +573,7 @@ export default function OrderDetail({ orderId }: OrderDetailProps) {
                 {orderDetails.status === 'DELIVERED' && orderDetails.currency === 'USD' && (
                   <Link
                     href="/profile?tab=support"
+                    onClick={stashSupportPrefill}
                     className="inline-flex items-center gap-2 rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
                   >
                     <MessageCircle className="w-4 h-4" /> Contact Support
@@ -773,6 +799,7 @@ export default function OrderDetail({ orderId }: OrderDetailProps) {
                               <div className="mt-2 flex flex-wrap gap-2">
                                 <Link
                                   href="/profile?tab=support"
+                                  onClick={stashSupportPrefill}
                                   className="inline-flex items-center justify-center rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-slate-700"
                                 >
                                   Raise a Ticket

@@ -152,6 +152,8 @@ async function decide({ module, id, decision, actor, reason }) {
         approvedByName: actor?.name || actor?.email || null,
         approvedAt: now,
         rejectionReason: null,
+        // Staff: ensure an approved account is actually enabled to log in.
+        ...(module === 'staff' ? { isActive: true } : {}),
       },
     });
     return { module, id, status: 'APPROVED' };
@@ -167,6 +169,8 @@ async function decide({ module, id, decision, actor, reason }) {
         approvedByName: actor?.name || actor?.email || null,
         approvedAt: now,
         rejectionReason: String(reason).trim(),
+        // Staff: a rejected account must be disabled so it cannot sign in.
+        ...(module === 'staff' ? { isActive: false } : {}),
       },
     });
     return { module, id, status: 'REJECTED' };

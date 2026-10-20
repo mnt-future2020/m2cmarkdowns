@@ -2450,6 +2450,22 @@ const approveVendor = async (req, res) => {
       return res.status(400).json({ error: 'Vendor is already approved' });
     }
 
+    // Maker-checker: a vendor can only be approved AFTER the registration review
+    // and QC inspection stages — i.e. from UNDER_REVIEW (post-inspection),
+    // APPROVAL_PENDING (employee-proposed), or REINSPECTION. Block PENDING
+    // (not yet reviewed) and REVIEWED (reviewed but QC not done) so the pipeline
+    // can't be skipped with a one-click approve.
+    const APPROVABLE_FROM = ['UNDER_REVIEW', 'APPROVAL_PENDING', 'REINSPECTION'];
+    if (!APPROVABLE_FROM.includes(existingVendor.status)) {
+      return res.status(400).json({
+        error: existingVendor.status === 'PENDING'
+          ? 'This vendor has not been reviewed yet. Review the registration, then assign QC and complete the inspection before approving.'
+          : existingVendor.status === 'REVIEWED'
+            ? 'Assign a QC checker and complete the factory inspection before approving this vendor.'
+            : `Cannot approve a vendor in "${existingVendor.status}" state.`,
+      });
+    }
+
     // Check if user is Super Admin — direct approve
     const isSuperAdmin = (req.user.roleName || '').toLowerCase().trim() === 'super admin';
 

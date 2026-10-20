@@ -135,8 +135,14 @@ const getAllCategories = async (req, res) => {
 
     // Add real product count
     const categoriesWithStats = await Promise.all(categories.map(async (category) => {
+      // Count only live (active + approved) products so the storefront count isn't
+      // inflated by pending/rejected/inactive items.
       const productCount = await prisma.product.count({
-        where: category.parentId ? { subCategory: category.name } : { category: category.name }
+        where: {
+          ...(category.parentId ? { subCategory: category.name } : { category: category.name }),
+          status: 'ACTIVE',
+          approvalStatus: 'APPROVED',
+        }
       });
       return {
         ...category,

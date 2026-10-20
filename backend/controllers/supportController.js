@@ -187,6 +187,13 @@ const updateTicketStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
 
+        // Only admins may change a ticket's status (prevents any logged-in
+        // customer/vendor from altering arbitrary tickets by id).
+        const role = req.user?.role?.toLowerCase() || 'user';
+        if (role !== 'admin' && role !== 'super_admin') {
+            return res.status(403).json({ success: false, error: 'Not authorized to change ticket status' });
+        }
+
         const ticket = await prisma.supportTicket.update({
             where: { id },
             data: { status },
@@ -277,7 +284,7 @@ const addTicketMessage = async (req, res) => {
         });
 
         // Notify the other party about the reply
-        const { createNotification: createSupportNotif } = require('./notificationController');
+        const { createNotification: createSupportNotif, createNotificationForRole: notifyAdmins } = require('./notificationController');
         if (role === 'admin' || role === 'super_admin') {
             // Admin replied → notify vendor/user who created the ticket
             createSupportNotif({
@@ -286,6 +293,15 @@ const addTicketMessage = async (req, res) => {
                 type: 'SUPPORT_REPLY',
                 title: 'New Support Reply',
                 message: `New reply on your ticket "${ticket.subject}".`,
+                data: { ticketId: ticket.id }
+            }).catch(() => {});
+        } else {
+            // Customer/vendor replied → notify admins so the reply isn't missed.
+            notifyAdmins({
+                role: 'ADMIN',
+                type: 'SUPPORT_REPLY',
+                title: 'New Support Reply',
+                message: `New customer reply on ticket "${ticket.subject}".`,
                 data: { ticketId: ticket.id }
             }).catch(() => {});
         }

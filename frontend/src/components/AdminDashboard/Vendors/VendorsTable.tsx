@@ -767,7 +767,10 @@ export default function VendorsTable() {
                               </button>
                             </Link>
                           )}
-                          {(vendor.status === 'PENDING' || vendor.status === 'UNDER_REVIEW') && hasPermission('vendor_management:approve') && (
+                          {/* Approve only AFTER inspection (UNDER_REVIEW). A PENDING vendor
+                              must be reviewed/qualified from the detail page first — no
+                              one-click approve that skips review + QC. */}
+                          {vendor.status === 'UNDER_REVIEW' && hasPermission('vendor_management:approve') && (
                             <>
                               <button
                                 title="Approve Vendor"

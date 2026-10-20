@@ -79,13 +79,25 @@ const generateRandomToken = () => {
 const register = async (req, res) => {
   try {
     console.log("📝 Registration request received:", req.body.email);
-    const { email, password, name, phoneNumber } = req.body;
+    let { email, password, name, phoneNumber } = req.body;
 
     // Validation
     if (!email || !password || !name || !phoneNumber) {
       return res.status(400).json({
         success: false,
         error: "Email, password, name, and phone number are required",
+      });
+    }
+
+    // Normalize email so lookups/uniqueness are case-insensitive (prevents
+    // duplicate accounts and later login lockouts from casing differences).
+    email = String(email).trim().toLowerCase();
+
+    // Minimum password strength.
+    if (String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Password must be at least 6 characters.",
       });
     }
 
@@ -252,7 +264,7 @@ const register = async (req, res) => {
 // Login user
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
 
     // Validation
     if (!email || !password) {
@@ -264,6 +276,8 @@ const login = async (req, res) => {
 
     // Check if input is email or phone number
     const isEmail = /\S+@\S+\.\S+/.test(email);
+    // Normalize email casing so login matches the stored (lowercased) address.
+    if (isEmail) email = String(email).trim().toLowerCase();
     const searchField = isEmail ? "email" : "phoneNumber";
 
     console.log(`🔍 Login attempt with ${searchField}:`, email);
@@ -316,6 +330,18 @@ const login = async (req, res) => {
       return res.status(401).json({
         success: false,
         error: "Account is deactivated. Please contact administrator.",
+      });
+    }
+
+    // Maker-checker: a staff (admin) account cannot sign in until approved.
+    // Enforced here too (not only on the dedicated admin login) so the gate
+    // can't be bypassed via the shared login endpoint.
+    if (userType === "admin" && user.approvalStatus && user.approvalStatus !== "APPROVED") {
+      return res.status(403).json({
+        success: false,
+        error: user.approvalStatus === "REJECTED"
+          ? "Your staff account was not approved. Please contact your administrator."
+          : "Your staff account is awaiting approval. You'll be able to sign in once it's approved.",
       });
     }
 
@@ -537,6 +563,10 @@ const googleCallback = async (req, res) => {
         if (superAdminRole) {
           createData.roleId = superAdminRole.id;
         }
+        // Google-auth admins are issued a token immediately, so mark them APPROVED
+        // to stay consistent with the maker-checker login gate (otherwise a later
+        // password login would be blocked as PENDING).
+        createData.approvalStatus = 'APPROVED';
       }
 
       // Note: FCM token should be saved via dedicated endpoint, not during OAuth
@@ -739,7 +769,7 @@ const verifyEmail = async (req, res) => {
 // Forgot password
 const forgotPassword = async (req, res) => {
   try {
-    const { email, userType: requestedUserType } = req.body;
+    let { email, userType: requestedUserType } = req.body;
 
     console.log("📧 Forgot password request for:", email);
     console.log("👤 Requested user type:", requestedUserType || "auto-detect");
@@ -750,6 +780,9 @@ const forgotPassword = async (req, res) => {
         error: "Email is required",
       });
     }
+
+    // Match the stored (lowercased) address.
+    email = String(email).trim().toLowerCase();
 
     // Find user in all collections (User, Admin, Vendor)
     // If userType is specified, check that collection first
@@ -802,9 +835,11 @@ const forgotPassword = async (req, res) => {
 
     if (!user) {
       console.log("❌ User not found with email:", email);
-      return res.status(404).json({
-        success: false,
-        error: "User not found with this email",
+      // Don't reveal whether an account exists (prevents enumeration) — same
+      // generic response as the success path.
+      return res.json({
+        success: true,
+        message: "If an account with that email exists, a password reset link has been sent.",
       });
     }
 
@@ -927,6 +962,13 @@ const resetPassword = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "Token and password are required",
+      });
+    }
+
+    if (String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Password must be at least 6 characters.",
       });
     }
 

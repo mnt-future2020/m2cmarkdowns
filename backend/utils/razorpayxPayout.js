@@ -44,14 +44,18 @@ const cleanNarration = (s) => String(s || 'M2C Wallet Payout').replace(/[^a-zA-Z
 
 /**
  * Create a RazorpayX payout for a withdrawal.
- * @returns {Promise<{ created: boolean, payoutId?: string, status?: string, mode?: string, error?: string }>}
+ * @returns {Promise<{ created: boolean, payoutId?: string, status?: string, mode?: string, unconfirmed?: boolean, error?: string }>}
  *   created=false means NO payout was created (safe for the caller to reverse the
  *   wallet debit). created=true means a payout exists — track it via `status`.
+ *   unconfirmed=true means the /payouts call failed ambiguously (network/5xx) so a
+ *   payout MAY have executed — the caller must NOT reverse; leave it Processing for
+ *   webhook/reconciliation (the idempotency key prevents a double payout on retry).
  */
 async function createWithdrawalPayout({ withdrawal, customer }) {
     const s = await getPayoutConfig();
     if (!s) return { created: false, error: 'RazorpayX not configured' };
 
+    let fundAccount;
     try {
         // 1) Contact
         const contact = await rzpxPost('/contacts', {
@@ -68,10 +72,17 @@ async function createWithdrawalPayout({ withdrawal, customer }) {
                 contact_id: contact.id, account_type: 'bank_account',
                 bank_account: { name: withdrawal.accountName, ifsc: withdrawal.ifsc, account_number: withdrawal.accountNumber },
             };
-        const fundAccount = await rzpxPost('/fund_accounts', faBody, s);
+        fundAccount = await rzpxPost('/fund_accounts', faBody, s);
+    } catch (e) {
+        // Contact/fund-account failures happen BEFORE any money moves → safe to reverse.
+        console.error('[razorpayx] setup failed:', e?.message || e);
+        return { created: false, error: e?.message || 'Payout setup failed' };
+    }
 
-        // 3) Payout (amount in paise). IMPS for bank, UPI for vpa.
-        const mode = withdrawal.method === 'UPI' ? 'UPI' : 'IMPS';
+    // 3) Payout (amount in paise). IMPS for bank, UPI for vpa. This is the only
+    // step that can move money, so its failure mode is handled separately.
+    const mode = withdrawal.method === 'UPI' ? 'UPI' : 'IMPS';
+    try {
         const payout = await rzpxPost('/payouts', {
             account_number: s.razorpayxAccountNumber,
             fund_account_id: fundAccount.id,
@@ -86,12 +97,19 @@ async function createWithdrawalPayout({ withdrawal, customer }) {
 
         return { created: true, payoutId: payout.id, status: payout.status, mode };
     } catch (e) {
-        // A 4xx before the payout was created (bad config, invalid account, auth) →
-        // nothing was sent, safe to reverse. Network/5xx are ambiguous, but no payout
-        // id was returned, so we still treat it as not-created and let the caller
-        // reverse; a stray payout would surface via webhook/manual reconciliation.
-        console.error('[razorpayx] payout failed:', e?.message || e);
-        return { created: false, error: e?.message || 'Payout failed' };
+        const http = e?.httpStatus;
+        const definitelyNotSent = typeof http === 'number' && http >= 400 && http < 500;
+        if (definitelyNotSent) {
+            // A 4xx (bad account, insufficient-balance rejection, validation) means the
+            // payout was NOT accepted → safe for the caller to reverse the debit.
+            console.error('[razorpayx] payout rejected (4xx):', e?.message || e);
+            return { created: false, error: e?.message || 'Payout rejected' };
+        }
+        // Network error / timeout / 5xx: the request MAY have reached RazorpayX and
+        // executed. Do NOT reverse — leave the withdrawal Processing and reconcile via
+        // the payout webhook (keyed by reference_id = withdrawalId).
+        console.error('[razorpayx] payout ambiguous failure (no reverse):', e?.message || e);
+        return { created: true, unconfirmed: true, status: 'Processing', mode, error: e?.message || 'Payout status unknown' };
     }
 }
 

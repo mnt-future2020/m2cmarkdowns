@@ -38,7 +38,8 @@ async function initializeAdmin() {
               name: 'Super Admin',
               description: 'Full system access — bypasses all permission checks',
               permissions: [],
-              isSystem: true
+              isSystem: true,
+              approvalStatus: 'APPROVED'
             }
           });
         }
@@ -83,6 +84,7 @@ async function initializeAdmin() {
         isActive: true,
         provider: "local",
         roleId: superAdminRole.id,
+        approvalStatus: 'APPROVED',
       },
     });
 

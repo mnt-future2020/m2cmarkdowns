@@ -46,22 +46,30 @@ async function reverseOrderPoints(order, actor = {}) {
 async function refundOrderToWallet(order, actor = {}) {
     const wasPaid = order.paymentStatus === 'PAID' && order.paymentMethod !== 'COD';
     if (!wasPaid) return;
-    const creditInr = order.totalAmountINR != null ? order.totalAmountINR : order.totalAmount;
+    // The gross total includes the points-funded portion. Redeemed points are
+    // given back AS POINTS by reverseOrderPoints (called alongside every use of
+    // this helper), so exclude their value here to avoid refunding twice.
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const grossInr = order.totalAmountINR != null ? order.totalAmountINR : order.totalAmount;
+    const creditInr = round2(Math.max(0, grossInr - (order.pointsRedeemedValueINR || 0)));
+    const refundAmt = round2(Math.max(0, order.totalAmount - (order.pointsRedeemedValue || 0)));
     try {
-        await creditWallet({
-            customerId: order.customerId,
-            amount: creditInr,
-            source: 'REFUND',
-            description: `Refund for order ${order.orderId}`,
-            refs: { orderId: order.id, orderCode: order.orderId },
-            actor: { id: actor?.id, name: actor?.name || actor?.email || 'Admin', type: 'admin' },
-        });
+        if (creditInr > 0) {
+            await creditWallet({
+                customerId: order.customerId,
+                amount: creditInr,
+                source: 'REFUND',
+                description: `Refund for order ${order.orderId}`,
+                refs: { orderId: order.id, orderCode: order.orderId },
+                actor: { id: actor?.id, name: actor?.name || actor?.email || 'Admin', type: 'admin' },
+            });
+        }
     } catch (e) {
         console.warn('[refundOrderToWallet] wallet credit failed:', e?.message || e);
     }
     await prisma.order.update({
         where: { id: order.id },
-        data: { refundStatus: 'WALLET', refundAmount: order.totalAmount },
+        data: { refundStatus: 'WALLET', refundAmount: refundAmt },
     }).catch(() => {});
 }
 

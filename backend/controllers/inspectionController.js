@@ -47,6 +47,15 @@ const createInspection = async (req, res) => {
             return res.status(404).json({ error: 'Vendor not found' });
         }
 
+        // Maker-checker: the registration must be reviewed & qualified before a
+        // factory inspection is scheduled. A PENDING vendor has not been reviewed.
+        if (vendor.status === 'PENDING') {
+            return res.status(400).json({
+                success: false,
+                error: 'Review the vendor registration first (mark it Reviewed & Qualified) before assigning a QC checker.',
+            });
+        }
+
         // Invariant: a vendor can have at most one active inspection at a time.
         // Prevents admin double-click / rescheduling from creating duplicate
         // SCHEDULED rows, which let checkers unintentionally submit the same

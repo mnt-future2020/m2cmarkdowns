@@ -13,6 +13,12 @@ exports.createReview = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
+        // Rating must be a whole number 1–5 (else the product rating average is corrupted).
+        const ratingNum = Number(rating);
+        if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+            return res.status(400).json({ success: false, message: 'Rating must be a whole number between 1 and 5' });
+        }
+
         // A customer may review a given product only once, ever — regardless of
         // how many times they buy it. Check by (user, product), not the order.
         const existingReview = await prisma.review.findUnique({
@@ -205,6 +211,12 @@ exports.createExperienceReview = async (req, res) => {
 
         if (!orderId || !rating) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
+        }
+
+        // Rating must be a whole number 1–5.
+        const ratingNum = Number(rating);
+        if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+            return res.status(400).json({ success: false, message: 'Rating must be a whole number between 1 and 5' });
         }
 
         // The order must belong to this customer.

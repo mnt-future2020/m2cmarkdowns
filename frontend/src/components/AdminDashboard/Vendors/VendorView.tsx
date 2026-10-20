@@ -443,6 +443,29 @@ export default function VendorView({ vendorId }: VendorViewProps) {
                 </>
               )}
 
+              {/* Post-inspection: the vendor is awaiting the final approve/reject
+                  decision. Without this the detail page showed no next-step action. */}
+              {(vendor.status === 'UNDER_REVIEW' || vendor.status === 'REINSPECTION') && hasPermission('vendor_management:approve') && (
+                <>
+                  <Button
+                    onClick={handleApprove}
+                    disabled={actionLoading === 'approve'}
+                    className="bg-green-600 text-white hover:bg-green-700 rounded-xl"
+                  >
+                    {actionLoading === 'approve' ? <LoadingSpinner size="sm" /> : (<><CheckCircle className="h-4 w-4 mr-2" />Approve</>)}
+                  </Button>
+                  <Button
+                    onClick={handleReject}
+                    disabled={actionLoading === 'reject'}
+                    variant="outline"
+                    className="text-red-600 border-red-600 hover:bg-red-50"
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Reject
+                  </Button>
+                </>
+              )}
+
               {vendor.status === 'APPROVED' && hasPermission('vendor_management:suspend') && (
                 <Button
                   onClick={handleSuspend}

@@ -407,7 +407,6 @@ export default function UserManagement() {
                 <TableHead>Contact</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Orders</TableHead>
                 <TableHead>Last Login</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -466,14 +465,6 @@ export default function UserManagement() {
                     </TableCell>
                     <TableCell>{getRoleBadge(user.role)}</TableCell>
                     <TableCell>{getStatusBadge(user.status)}</TableCell>
-                    <TableCell>
-                      <div className="text-sm">
-                        <div className="font-medium">{user.totalOrders} orders</div>
-                        {user.totalSpent > 0 && (
-                          <div className="text-slate-500">{formatPrice(user.totalSpent ?? 0, 'INR')}</div>
-                        )}
-                      </div>
-                    </TableCell>
                     <TableCell>
                       <div className="text-sm text-slate-600">
                         {new Date(user.lastLogin).toLocaleDateString()}

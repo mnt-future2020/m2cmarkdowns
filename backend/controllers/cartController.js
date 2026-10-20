@@ -17,6 +17,15 @@ const addToCart = async (req, res) => {
       });
     }
 
+    // Quantity must be a positive integer (parity with updateCartItem) — a zero
+    // or negative value would decrement a line and drive the cart total negative.
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Quantity must be a positive whole number'
+      });
+    }
+
     // Verify product exists and get its price
     const product = await prisma.product.findUnique({
       where: { id: productId },
@@ -29,6 +38,8 @@ const addToCart = async (req, res) => {
         priceUSD: true,
         inStock: true,
         totalStock: true,
+        hasVariants: true,
+        inventory: { select: { baseStock: true } },
         priceVisibility: true,
         logisticsConfig: true,
         variants: variantId ? {
@@ -71,7 +82,12 @@ const addToCart = async (req, res) => {
       });
     }
 
-    const checkStock = variantId ? product.variants[0].stock : product.totalStock;
+    // For a variant product added without a specific variant (base unit), check
+    // the base-unit stock (inventory.baseStock), not totalStock which sums all
+    // variants. Matches getCart's availableStock logic.
+    const checkStock = variantId
+      ? product.variants[0].stock
+      : (product.hasVariants ? (product.inventory?.baseStock ?? 0) : product.totalStock);
 
     if (!product.inStock || checkStock < quantity) {
       return res.status(400).json({
@@ -580,6 +596,8 @@ const updateCartItem = async (req, res) => {
       where: { id: cartItem.productId },
       select: {
         totalStock: true,
+        hasVariants: true,
+        inventory: { select: { baseStock: true } },
         inStock: true,
         logisticsConfig: true,
         variants: cartItem.variantId ? {
@@ -591,7 +609,8 @@ const updateCartItem = async (req, res) => {
 
     const availableStock = cartItem.variantId && product?.variants?.length > 0
       ? product.variants[0].stock
-      : product?.totalStock;
+      // Base unit of a variant product → base-unit stock, not the summed totalStock.
+      : (product?.hasVariants ? (product?.inventory?.baseStock ?? 0) : product?.totalStock);
 
     if (wantsQuantity && (!product || !product.inStock || availableStock < quantity)) {
       return res.status(400).json({
