@@ -334,6 +334,17 @@ exports.getAllReviews = async (req, res) => {
             }
         }
 
+        // Search in the DB (across the review comment + related user/product) BEFORE
+        // paginating, so matches on other pages aren't missed and the total is correct.
+        if (search) {
+            where.OR = [
+                { comment: { contains: search, mode: 'insensitive' } },
+                { user: { is: { name: { contains: search, mode: 'insensitive' } } } },
+                { user: { is: { email: { contains: search, mode: 'insensitive' } } } },
+                { product: { is: { name: { contains: search, mode: 'insensitive' } } } },
+            ];
+        }
+
         const reviews = await prisma.review.findMany({
             where,
             include: {
@@ -370,20 +381,10 @@ exports.getAllReviews = async (req, res) => {
             take: Number(limit)
         });
 
-        // Apply search filter in JS (MongoDB doesn't support easy OR across relations)
-        let filteredReviews = reviews;
-        if (search) {
-            const searchLower = search.toLowerCase();
-            filteredReviews = reviews.filter(review =>
-                (review.user?.name || '').toLowerCase().includes(searchLower) ||
-                (review.user?.email || '').toLowerCase().includes(searchLower) ||
-                (review.product?.name || '').toLowerCase().includes(searchLower) ||
-                (review.comment || '').toLowerCase().includes(searchLower)
-            );
-        }
-
-        // Get counts and average rating in parallel
-        const [totalCount, pendingCount, approvedCount, rejectedCount, ratingAggregate] = await Promise.all([
+        // Get counts and average rating in parallel. filteredCount respects the same
+        // where (status + search) so pagination is accurate; the stat counts stay global.
+        const [filteredCount, totalCount, pendingCount, approvedCount, rejectedCount, ratingAggregate] = await Promise.all([
+            prisma.review.count({ where }),
             prisma.review.count(),
             prisma.review.count({ where: { status: 'PENDING' } }),
             prisma.review.count({ where: { status: 'APPROVED' } }),
@@ -394,12 +395,12 @@ exports.getAllReviews = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: filteredReviews,
+            data: reviews,
             pagination: {
-                total: totalCount,
+                total: filteredCount,
                 page: Number(page),
                 limit: Number(limit),
-                totalPages: Math.ceil(totalCount / Number(limit))
+                totalPages: Math.ceil(filteredCount / Number(limit))
             },
             stats: {
                 total: totalCount,
@@ -535,6 +536,16 @@ exports.getAllExperienceReviews = async (req, res) => {
             else if (status === 'rejected') where.status = 'REJECTED';
         }
 
+        // Search in the DB before paginating (so matches on other pages aren't missed).
+        if (search) {
+            where.OR = [
+                { comment: { contains: search, mode: 'insensitive' } },
+                { user: { is: { name: { contains: search, mode: 'insensitive' } } } },
+                { user: { is: { email: { contains: search, mode: 'insensitive' } } } },
+                { order: { is: { orderId: { contains: search, mode: 'insensitive' } } } },
+            ];
+        }
+
         const reviews = await prisma.experienceReview.findMany({
             where,
             include: {
@@ -546,18 +557,8 @@ exports.getAllExperienceReviews = async (req, res) => {
             take: Number(limit)
         });
 
-        let filteredReviews = reviews;
-        if (search) {
-            const s = search.toLowerCase();
-            filteredReviews = reviews.filter((r) =>
-                (r.user?.name || '').toLowerCase().includes(s) ||
-                (r.user?.email || '').toLowerCase().includes(s) ||
-                (r.order?.orderId || '').toLowerCase().includes(s) ||
-                (r.comment || '').toLowerCase().includes(s)
-            );
-        }
-
-        const [totalCount, pendingCount, approvedCount, rejectedCount, ratingAggregate] = await Promise.all([
+        const [filteredCount, totalCount, pendingCount, approvedCount, rejectedCount, ratingAggregate] = await Promise.all([
+            prisma.experienceReview.count({ where }),
             prisma.experienceReview.count(),
             prisma.experienceReview.count({ where: { status: 'PENDING' } }),
             prisma.experienceReview.count({ where: { status: 'APPROVED' } }),
@@ -568,12 +569,12 @@ exports.getAllExperienceReviews = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: filteredReviews,
+            data: reviews,
             pagination: {
-                total: totalCount,
+                total: filteredCount,
                 page: Number(page),
                 limit: Number(limit),
-                totalPages: Math.ceil(totalCount / Number(limit))
+                totalPages: Math.ceil(filteredCount / Number(limit))
             },
             stats: {
                 total: totalCount,

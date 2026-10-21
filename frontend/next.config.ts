@@ -48,8 +48,16 @@ const nextConfig: NextConfig = {
         pathname: '/**',
       },
       {
+        // Legacy assets still on Cloudinary during the Spaces migration.
         protocol: 'https',
         hostname: 'res.cloudinary.com',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        // DigitalOcean Spaces — origin + CDN (any bucket/region subdomain).
+        protocol: 'https',
+        hostname: '**.digitaloceanspaces.com',
         port: '',
         pathname: '/**',
       },

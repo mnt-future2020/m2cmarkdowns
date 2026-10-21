@@ -1,9 +1,9 @@
-const { cloudinary } = require('../config/cloudinary');
+const spaces = require('../config/spaces');
 
 // Folders the client is allowed to request a signed upload for. Restricting the
 // folder prevents a leaked signature endpoint from being used to write anywhere
-// in the Cloudinary account. Keep in sync with the folders used by
-// vendorController's uploadFiles() calls.
+// in the Space. Keep in sync with the folders used by vendorController's
+// uploadFiles() calls and the storefront upload sites.
 const ALLOWED_FOLDERS = new Set([
   'vendor-logos',
   'vendor-documents',
@@ -21,34 +21,36 @@ const ALLOWED_FOLDERS = new Set([
   'support-tickets',
 ]);
 
-// GET /api/uploads/signature?folder=<folder>
-// Returns a short-lived signature so the browser can upload a file directly to
-// Cloudinary (bypassing the API server, which on Vercel is capped at a 4.5 MB
-// request body). The API secret never leaves the server — only the computed
-// signature does.
-const getUploadSignature = (req, res) => {
+// GET /api/uploads/signature?folder=<folder>&contentType=<mime>&ext=<.ext>
+// Returns a short-lived presigned PUT URL so the browser can upload a file
+// directly to DigitalOcean Spaces (bypassing the API server, which on Vercel is
+// capped at a 4.5 MB request body). The access secret never leaves the server —
+// only the signed URL does. The object is stored public-read and is then served
+// from the Spaces CDN at `publicUrl`.
+const getUploadSignature = async (req, res) => {
   try {
+    if (!spaces.isConfigured()) {
+      return res.status(503).json({ success: false, error: 'Media storage is not configured' });
+    }
     const requested = typeof req.query.folder === 'string' ? req.query.folder : '';
     const folder = ALLOWED_FOLDERS.has(requested) ? requested : 'vendor-documents';
-    const timestamp = Math.round(Date.now() / 1000);
+    const contentType = typeof req.query.contentType === 'string' && req.query.contentType
+      ? req.query.contentType
+      : 'application/octet-stream';
+    const ext = typeof req.query.ext === 'string' ? req.query.ext : undefined;
 
-    // Only these params are signed; the client must send exactly the same set
-    // (plus file + api_key) to Cloudinary or the signature check will fail.
-    const signature = cloudinary.utils.api_sign_request(
-      { timestamp, folder },
-      process.env.CLOUDINARY_API_SECRET,
-    );
+    const { uploadUrl, key, publicUrl } = await spaces.presignPut({ folder, contentType, ext });
 
     return res.json({
       success: true,
-      timestamp,
+      provider: 'spaces',
+      uploadUrl,   // PUT the raw file bytes here
+      key,         // stored object key (== public_id)
+      publicUrl,   // final CDN URL to persist
       folder,
-      signature,
-      apiKey: process.env.CLOUDINARY_API_KEY,
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
     });
   } catch (error) {
-    console.error('Failed to create Cloudinary upload signature:', error);
+    console.error('Failed to create Spaces upload signature:', error?.message || error);
     return res.status(500).json({ success: false, error: 'Failed to create upload signature' });
   }
 };

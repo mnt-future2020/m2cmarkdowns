@@ -170,7 +170,56 @@ export async function authenticatedFetch(url: string, options: RequestInit = {})
   return response
 }
 
-import axiosInstance from './axios'
+import axiosInstance, { createAdminAxiosInstance } from './axios'
+
+// Result of checking the stored admin session against the backend.
+//  - 'valid'       the server confirmed a live admin session
+//  - 'invalid'     the server rejected it (no/expired/revoked token, or not an
+//                  admin) — caller must clear and send the user to login
+//  - 'unreachable' the backend couldn't be reached (network/5xx); we can't prove
+//                  the session is invalid, so a plausibly-live session is kept
+export type AdminSessionResult =
+  | { status: 'valid'; user: AdminUser }
+  | { status: 'invalid' }
+  | { status: 'unreachable' }
+
+// Verify the stored admin session with the backend.
+//
+// A token sitting in localStorage is NOT proof of a live session — it can be
+// stale, expired, or revoked. Presence-only checks let a leftover token drop
+// anyone straight into the dashboard with no credentials. This confirms with
+// the server (GET /auth/admin/me) and clears auth on a definitive rejection.
+//
+// Uses a bare admin axios instance so the global 401 interceptor's own
+// clear-and-redirect doesn't race the caller's handling.
+export async function verifyAdminSession(): Promise<AdminSessionResult> {
+  const auth = getStoredAuth()
+  if (!auth || !auth.user || auth.user.role?.toLowerCase() !== 'admin') {
+    return { status: 'invalid' }
+  }
+
+  try {
+    const client = createAdminAxiosInstance()
+    const res = await client.get('/auth/admin/me')
+    const user = res.data?.data
+
+    if (!user || !user.id || String(user.role).toLowerCase() !== 'admin') {
+      clearAuth()
+      return { status: 'invalid' }
+    }
+
+    return { status: 'valid', user: user as AdminUser }
+  } catch (error: any) {
+    const code = error?.response?.status
+    if (code === 401 || code === 403 || code === 404) {
+      clearAuth()
+      return { status: 'invalid' }
+    }
+    // Network failure or server error — can't prove the session is invalid, so
+    // don't destroy it. Fail open only here.
+    return { status: 'unreachable' }
+  }
+}
 
 // Logout function
 export async function logout(): Promise<void> {

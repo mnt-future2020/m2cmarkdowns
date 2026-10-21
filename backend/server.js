@@ -417,9 +417,20 @@ app.get("/api/document-proxy", async (req, res) => {
     res.status(status).json({ error: message });
   };
 
-  // Helper: try Cloudinary archive API for a given resource type
+  // Helper: try Cloudinary archive API for a given resource type.
+  // LEGACY ONLY — this fallback exists for access-controlled assets still on the
+  // developer's Cloudinary account during the Spaces migration. Spaces objects are
+  // public-read, so the direct fetch above always succeeds and this never runs for
+  // them. Self-contained so config/cloudinary.js (now Spaces-backed) stays clean.
   const tryArchive = async (resType) => {
-    const { cloudinary } = require("./config/cloudinary");
+    if (!/res\.cloudinary\.com/.test(String(url))) return null;
+    if (!process.env.CLOUDINARY_API_SECRET) return null;
+    const cloudinary = require("cloudinary").v2;
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+    });
     const archiveUrl = cloudinary.utils.download_archive_url({
       public_ids: [publicId],
       resource_type: resType,

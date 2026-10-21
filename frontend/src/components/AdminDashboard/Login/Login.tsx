@@ -7,7 +7,7 @@ import { Button } from '@/components/UI/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/UI/Card'
 import axiosInstance from '@/lib/axios'
 import { dispatchAuthChange } from '@/lib/authEvents'
-import { getStoredAuth } from '@/lib/auth'
+import { verifyAdminSession } from '@/lib/auth'
 import {
   Eye,
   EyeOff,
@@ -70,14 +70,26 @@ export default function AdminLogin() {
     rememberMe: false
   })
 
-  // Redirect if already logged in as admin
+  // Redirect only if there's a *verified* live admin session. A token merely
+  // present in storage can be stale/expired/revoked — validate with the backend
+  // first, otherwise a leftover token would silently skip login into the
+  // dashboard. A definitive rejection clears auth (inside verifyAdminSession)
+  // and shows the form; an unreachable backend keeps a plausibly-live session.
   useEffect(() => {
-    const auth = getStoredAuth()
-    if (auth) {
-      router.replace('/admin/dashboard')
-    } else {
-      setAuthChecked(true)
-    }
+    let cancelled = false
+    verifyAdminSession()
+      .then((result) => {
+        if (cancelled) return
+        if (result.status === 'valid' || result.status === 'unreachable') {
+          router.replace('/admin/dashboard')
+        } else {
+          setAuthChecked(true)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAuthChecked(true)
+      })
+    return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check for error from Google OAuth redirect

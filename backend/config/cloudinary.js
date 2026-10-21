@@ -1,70 +1,62 @@
-const cloudinary = require('cloudinary').v2;
+/**
+ * Media storage facade — now backed by DigitalOcean Spaces (see config/spaces.js).
+ *
+ * This file keeps its original name and exported function names on purpose: ~30
+ * controllers `require('../config/cloudinary')` and call uploadToCloudinary /
+ * deleteFromCloudinary / resolveBase64InValue / resolveProductImageUrls /
+ * resolveVariantImageUrls / uploadDataUriIfBase64. Swapping the internals here
+ * migrates every one of them to Spaces without touching the controllers.
+ *
+ * During the handover migration, reads of legacy `res.cloudinary.com` URLs keep
+ * working (those objects still exist until the migration script re-homes them);
+ * all NEW writes land in Spaces.
+ */
+const spaces = require('./spaces');
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-// Helper function to upload file to Cloudinary
+// Upload a raw buffer. `options.folder` + `options.resource_type` mirror the old
+// Cloudinary call sites. Returns { secure_url, public_id, ... }.
 const uploadToCloudinary = async (fileBuffer, options = {}) => {
-  return new Promise((resolve, reject) => {
-    const uploadOptions = {
-      resource_type: 'auto',
-      folder: 'vendor-documents',
-      ...options
-    };
-
-    cloudinary.uploader.upload_stream(
-      uploadOptions,
-      (error, result) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(result);
-        }
-      }
-    ).end(fileBuffer);
+  const { folder = 'vendor-documents', resource_type, contentType, filename } = options;
+  // resource_type 'image' → optimise; 'raw'/'auto' with a non-image mime → store as-is.
+  const optimizeImages = resource_type !== 'raw';
+  return spaces.putObject(fileBuffer, {
+    folder,
+    contentType: contentType || (resource_type === 'image' ? 'image/jpeg' : undefined),
+    filename,
+    optimizeImages,
   });
 };
 
-// Helper function to delete file from Cloudinary
+// Delete by stored id. For Spaces the public_id IS the object key; we also accept
+// a full URL and strip it to the key.
 const deleteFromCloudinary = async (publicId) => {
   try {
-    const result = await cloudinary.uploader.destroy(publicId);
-    return result;
+    return await spaces.deleteObject(publicId);
   } catch (error) {
-    console.error('Error deleting from Cloudinary:', error);
+    console.error('Error deleting media from Spaces:', error?.message || error);
     throw error;
   }
 };
 
-// If `url` is a data URI (data:image/...;base64,...), upload it to Cloudinary
-// and return the secure URL. Otherwise returns the input unchanged.
+// If `url` is a base64 data URI, upload it to Spaces and return the public URL.
+// Anything else (already-hosted URL, relative path) passes through unchanged.
 const uploadDataUriIfBase64 = async (url, options = {}) => {
   if (typeof url !== 'string' || !url.startsWith('data:')) return url;
-  // Tolerate optional parameters between the mime type and the ;base64 marker.
-  // jsPDF emits `data:application/pdf;filename=generated.pdf;base64,…`, which the
-  // old `^data:([^;]+);base64,` regex could not match — so signed PDFs bypassed
-  // this upload and the whole base64 string was persisted in MongoDB (F-07).
+  // Tolerate optional params between the mime type and the ;base64 marker, e.g.
+  // jsPDF's `data:application/pdf;filename=generated.pdf;base64,…`.
   const match = url.match(/^data:([^;,]+)(?:;[^;,]+)*;base64,(.+)$/);
   if (!match) return url;
   const mime = match[1];
   const buffer = Buffer.from(match[2], 'base64');
-  // Non-images (e.g. the signed PDF report) must not upload as resource_type
-  // 'image' — use 'auto' so Cloudinary stores them as deliverable raw assets.
-  const resourceType = mime.startsWith('image/') ? 'image' : 'auto';
-  const result = await uploadToCloudinary(buffer, {
-    folder: 'products',
-    resource_type: resourceType,
-    ...options,
+  const result = await spaces.putObject(buffer, {
+    folder: options.folder || 'products',
+    contentType: mime,
+    optimizeImages: options.resource_type !== 'raw',
   });
   return result.secure_url;
 };
 
-// Resolve an array of product image objects ({ url, ... }) — uploads any
-// base64 data URIs and replaces with Cloudinary URLs.
+// Resolve an array of product image objects ({ url, ... }).
 const resolveProductImageUrls = async (images) => {
   if (!Array.isArray(images)) return images;
   return Promise.all(
@@ -82,10 +74,8 @@ const resolveVariantImageUrls = async (urls, options = {}) => {
   return Promise.all(urls.map((u) => uploadDataUriIfBase64(u, options)));
 };
 
-// Deep-walks any JSON-ish value and replaces every base64 data URI string it
-// encounters with the uploaded Cloudinary secure URL. Handles string, array,
-// plain object. Heavy keys like `data`, `url`, `image`, `photo` etc. are
-// covered implicitly since any string value is checked.
+// Deep-walk any JSON-ish value and replace every base64 data URI string with its
+// uploaded Spaces URL. Handles string, array, plain object.
 const resolveBase64InValue = async (value, options = {}) => {
   if (value == null) return value;
   if (typeof value === 'string') {
@@ -96,10 +86,7 @@ const resolveBase64InValue = async (value, options = {}) => {
   }
   if (typeof value === 'object') {
     const entries = await Promise.all(
-      Object.entries(value).map(async ([k, v]) => [
-        k,
-        await resolveBase64InValue(v, options),
-      ]),
+      Object.entries(value).map(async ([k, v]) => [k, await resolveBase64InValue(v, options)]),
     );
     return Object.fromEntries(entries);
   }
@@ -107,7 +94,8 @@ const resolveBase64InValue = async (value, options = {}) => {
 };
 
 module.exports = {
-  cloudinary,
+  // Note: `cloudinary` is intentionally NOT exported any more — nothing should
+  // depend on the Cloudinary SDK object. uploadController uses spaces.presignPut.
   uploadToCloudinary,
   deleteFromCloudinary,
   uploadDataUriIfBase64,

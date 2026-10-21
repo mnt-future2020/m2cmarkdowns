@@ -1371,6 +1371,10 @@ const approveProduct = async (req, res) => {
       updateData.returnable = !(returnable === false || returnable === 'false' || returnable === 'no');
     }
 
+    // Collected variant update ops — applied atomically with the product update
+    // below (so an approval never leaves variants repriced but the product unapproved).
+    let variantOps = [];
+
     // Handle pricing based on whether product has variants
     if (product.hasVariants && product.variants.length > 0) {
       // Product has variants - require variant prices
@@ -1390,9 +1394,8 @@ const approveProduct = async (req, res) => {
         });
       }
 
-      // Update each variant with admin price — auto-calculate INR/USD from exchange rate
-      await Promise.all(
-        product.variants.map(variant => {
+      // Build each variant's update op (executed in the transaction below).
+      variantOps = product.variants.map(variant => {
           const adminFixed = parseFloat(variantPrices[variant.id]);
           const variantData = {
             adminFixedPrice: adminFixed,
@@ -1418,8 +1421,7 @@ const approveProduct = async (req, res) => {
             where: { id: variant.id },
             data: variantData
           });
-        })
-      );
+        });
 
       // Set base admin price for the product
       if (adminPrice !== undefined && adminPrice !== null && parseFloat(adminPrice) > 0) {
@@ -1475,20 +1477,24 @@ const approveProduct = async (req, res) => {
       updateData.priceVisibility = priceVisibility;
     }
 
-    // Update product approval status
-    const updatedProduct = await prisma.product.update({
-      where: { id: id },
-      data: updateData,
-      include: {
-        variants: true,
-        vendor: {
-          select: {
-            companyName: true,
-            ownerName: true
+    // Apply the variant repricing and the product approval atomically — either all
+    // commit or none, so approval can't leave variants repriced yet product unapproved.
+    const [updatedProduct] = await prisma.$transaction([
+      prisma.product.update({
+        where: { id: id },
+        data: updateData,
+        include: {
+          variants: true,
+          vendor: {
+            select: {
+              companyName: true,
+              ownerName: true
+            }
           }
         }
-      }
-    });
+      }),
+      ...variantOps,
+    ]);
 
     // Notify vendor about product approval
     const { createNotification } = require('./notificationController');

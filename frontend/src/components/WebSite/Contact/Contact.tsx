@@ -10,10 +10,11 @@ import {
   Loader2,
   Check,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Reveal from '@/components/WebSite/Shared/Reveal';
 import { showCenterNotice } from '@/components/UI/CenterNotice';
 import { contactEnquiryService } from '@/services/contactEnquiryService';
+import { companyInfoService, type PublicCompanyInfo } from '@/services/companyInfoService';
 import { HEAR_ABOUT_US_OPTIONS } from '@/lib/enquirySources';
 import Dropdown from '@/components/UI/Dropdown';
 import VendorApplicationModal from '@/components/WebSite/Shared/VendorApplicationModal';
@@ -46,65 +47,12 @@ const VENDOR_GROUND =
  * does not look like somewhere you can type.
  */
 /**
- * The contact details, exactly as this page already carried them.
- *
- * They are placeholders - heritagetextiles.com is not this company, and +1
- * (555) is the number range reserved for fiction - and they are left alone on
- * purpose. Rewriting what a page says is not part of a UI pass, and swapping
- * live contact details is the owner's call, not mine.
- *
- * Lifted into one object rather than typed into the markup so that whenever
- * the real values are settled - by hand here, or by pointing this at
- * companyInfoService.getPublicCompanyInfo(), the admin record the footer
- * already reads - it is a single edit instead of eleven scattered strings.
+ * Contact details are NOT hardcoded — they come from the admin company record
+ * (companyInfoService.getPublicCompanyInfo(), the same source the footer uses),
+ * built into the directory below at render time. Rows with no value are hidden,
+ * so the page never shows a placeholder. "Customer Care · Available 24/7" is a
+ * service statement (not company-specific data), so it stays as static copy.
  */
-const CONTACT_DETAILS = {
-  emails: ['info@heritagetextiles.com', 'support@heritagetextiles.com'],
-  phones: ['+1 (555) 123-4567', '+1 (555) 987-6543'],
-  address: ['123 Heritage Lane', 'Artisan District, AD 12345', 'United States'],
-  // Was a Monday-to-Saturday counter schedule with Sunday closed. M2C has no
-  // shopfront and care is staffed round the clock, so the card states that
-  // instead - and the page stops contradicting itself, since the vendor band
-  // further down has always advertised 24/7 support.
-  support: ['Available 24/7', 'Every day of the week'],
-  partnerships: 'partnerships@heritagetextiles.com',
-};
-
-/**
- * The four blocks of the directory. Data-driven because they are the same
- * shape four times over - an icon, a caption, and one or more lines, some of
- * which can be acted on.
- */
-const DIRECTORY = [
-  {
-    key: 'email',
-    Icon: Mail,
-    label: 'Email Us',
-    lines: CONTACT_DETAILS.emails.map((value) => ({ text: value, href: `mailto:${value}` })),
-  },
-  {
-    key: 'phone',
-    Icon: Phone,
-    label: 'Call Us',
-    // Strip the formatting out of the href only; the visible text keeps it.
-    lines: CONTACT_DETAILS.phones.map((value) => ({
-      text: value,
-      href: `tel:${value.replace(/[^\d+]/g, '')}`,
-    })),
-  },
-  {
-    key: 'address',
-    Icon: MapPin,
-    label: 'Visit Us',
-    lines: CONTACT_DETAILS.address.map((value) => ({ text: value, href: null })),
-  },
-  {
-    key: 'support',
-    Icon: Clock,
-    label: 'Customer Care',
-    lines: CONTACT_DETAILS.support.map((value) => ({ text: value, href: null })),
-  },
-];
 
 /**
  * One weight, one colour, for every value in the directory.
@@ -178,6 +126,35 @@ const Contact = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [showVendorModal, setShowVendorModal] = useState(false);
+
+  // Live company contact details (same admin record the footer reads). Seed from
+  // the cache for an instant first paint, then refresh from the API.
+  const [info, setInfo] = useState<PublicCompanyInfo>(() => companyInfoService.getCachedCompanyInfo());
+  useEffect(() => {
+    let cancelled = false;
+    companyInfoService.getPublicCompanyInfo().then((d) => { if (!cancelled) setInfo(d); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const email = info.companyEmail?.trim() || '';
+  const phone = info.companyPhone?.trim() || '';
+  const addressLines = useMemo(() => [
+    info.registeredAddress?.trim(),
+    [info.city, info.state, info.zipCode].map((v) => v?.trim()).filter(Boolean).join(', '),
+    info.country?.trim(),
+  ].filter(Boolean) as string[], [info]);
+
+  // The directory, built from whatever contact details the admin has set. Rows
+  // with no data are omitted so nothing ever shows a placeholder.
+  const directory = useMemo(() => {
+    const rows: { key: string; Icon: typeof Mail; label: string; lines: { text: string; href: string | null }[] }[] = [];
+    if (email) rows.push({ key: 'email', Icon: Mail, label: 'Email Us', lines: [{ text: email, href: `mailto:${email}` }] });
+    if (phone) rows.push({ key: 'phone', Icon: Phone, label: 'Call Us', lines: [{ text: phone, href: `tel:${phone.replace(/[^\d+]/g, '')}` }] });
+    if (addressLines.length) rows.push({ key: 'address', Icon: MapPin, label: 'Visit Us', lines: addressLines.map((text) => ({ text, href: null })) });
+    // Service statement (not company-specific data), always shown.
+    rows.push({ key: 'support', Icon: Clock, label: 'Customer Care', lines: [{ text: 'Available 24/7', href: null }, { text: 'Every day of the week', href: null }] });
+    return rows;
+  }, [email, phone, addressLines]);
 
   /**
    * Which required answers are actually usable, recomputed on every keystroke.
@@ -307,24 +284,27 @@ const Contact = () => {
               &mdash; reach us whichever way suits you.
             </p>
 
-            {/* The primary line of each, and the same strings the directory
-                below prints — one object feeds both, so the two halves of the
-                page cannot end up quoting different numbers. */}
+            {/* The primary phone + email, pulled from the admin company record;
+                each chip renders only when that detail is set. */}
             <div className="mt-7 flex flex-wrap justify-center gap-2.5">
+              {phone && (
               <a
-                href={`tel:${CONTACT_DETAILS.phones[0].replace(/[^\d+]/g, '')}`}
+                href={`tel:${phone.replace(/[^\d+]/g, '')}`}
                 className="inline-flex max-w-full items-center gap-2 rounded-full border border-[#e6dcd0] bg-white px-4 py-2.5 text-sm font-semibold text-[#1a1a1a] transition-colors hover:border-[#e01a1b] hover:text-[#e01a1b]"
               >
                 <Phone aria-hidden className="h-4 w-4 shrink-0 text-[#e01a1b]" />
-                <span className="truncate">{CONTACT_DETAILS.phones[0]}</span>
+                <span className="truncate">{phone}</span>
               </a>
+              )}
+              {email && (
               <a
-                href={`mailto:${CONTACT_DETAILS.emails[0]}`}
+                href={`mailto:${email}`}
                 className="inline-flex max-w-full items-center gap-2 rounded-full border border-[#e6dcd0] bg-white px-4 py-2.5 text-sm font-semibold text-[#1a1a1a] transition-colors hover:border-[#e01a1b] hover:text-[#e01a1b]"
               >
                 <Mail aria-hidden className="h-4 w-4 shrink-0 text-[#e01a1b]" />
-                <span className="truncate">{CONTACT_DETAILS.emails[0]}</span>
+                <span className="truncate">{email}</span>
               </a>
+              )}
             </div>
           </Reveal>
         </div>
@@ -358,7 +338,7 @@ const Contact = () => {
               </Reveal>
 
               <div className="divide-y divide-[#f2e9df] overflow-hidden rounded-2xl border border-[#efe4d8] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-                {DIRECTORY.map((row, index) => (
+                {directory.map((row, index) => (
                   <Reveal
                     key={row.key}
                     delay={index * 80}
@@ -414,15 +394,17 @@ const Contact = () => {
                   Are you a skilled artisan interested in joining our marketplace? We&apos;d love to
                   learn about your craft and explore partnership opportunities.
                 </p>
-                <p className="mt-3 text-[14.5px] text-[#5f5550]">
-                  Email us at:{' '}
-                  <a
-                    href={`mailto:${CONTACT_DETAILS.partnerships}`}
-                    className="font-semibold text-[#e01a1b] transition-colors hover:text-[#c41617]"
-                  >
-                    {CONTACT_DETAILS.partnerships}
-                  </a>
-                </p>
+                {email && (
+                  <p className="mt-3 text-[14.5px] text-[#5f5550]">
+                    Email us at:{' '}
+                    <a
+                      href={`mailto:${email}`}
+                      className="font-semibold text-[#e01a1b] transition-colors hover:text-[#c41617]"
+                    >
+                      {email}
+                    </a>
+                  </p>
+                )}
               </Reveal>
             </div>
 

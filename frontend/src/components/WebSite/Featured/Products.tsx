@@ -43,93 +43,6 @@ import { publicProductService, PublicProduct } from '@/services/publicProductSer
 /** How many products the row asks for, and shows. */
 const FEATURED_COUNT = 6;
 
-/**
- * ⚠️ PLACEHOLDER PRODUCTS — REMOVE BEFORE LAUNCH ⚠️
- *
- * The featured endpoint currently returns four products, and the row is built
- * for six. These two pad it out so the layout can be reviewed full.
- *
- * They are NOT real. Both fail the moment anyone interacts with them:
- *  · clicking either card routes to /products/<slug>, which does not exist → 404
- *  · Add to Cart posts an id the backend has never seen → error toast
- *
- * The proper fix is to flag two more products as featured in the admin, which
- * takes seconds and needs no code. When that happens, delete this constant and
- * the `padded` line below it — nothing else refers to them.
- *
- * The photographs are real, at least: both already ship in the repo under
- * assets/images/features/products, and both are shot on light backgrounds so
- * they sit correctly beside the four coming from the API.
- */
-const PLACEHOLDER_PRODUCTS = [
-  {
-    id: 'placeholder-fp3',
-    slug: 'placeholder-fp3',
-    name: 'Cotton Bath Towel — Twin Pack',
-    description: 'Placeholder product for layout review.',
-    category: 'Bath & Terry Towels',
-    basePrice: 11.4,
-    originalPrice: 15.2,
-    originalPriceUSD: 15.2,
-    rating: 0,
-    reviews: 0,
-    images: [
-      {
-        id: 'placeholder-fp3-img',
-        url: '/assets/images/features/products/fp3.jpg',
-        alt: 'Two folded cotton bath towels',
-        isPrimary: true,
-        imageType: 'cover' as const,
-      },
-    ],
-    tags: [],
-    inStock: true,
-    totalStock: 40,
-    hasVariants: false,
-    createdAt: '',
-    updatedAt: '',
-    vendorId: '',
-    isFromInventory: false,
-    baseSku: '',
-    lowStockThreshold: 0,
-    trackInventory: false,
-    dispatchTimeline: { processingDays: 0, shippingDays: 0, totalDays: 0 },
-  },
-  {
-    id: 'placeholder-fp1',
-    slug: 'placeholder-fp1',
-    name: 'Striped Kitchen Towel Set',
-    description: 'Placeholder product for layout review.',
-    category: 'Kitchen & Dining',
-    basePrice: 8.25,
-    originalPrice: 11.0,
-    originalPriceUSD: 11.0,
-    rating: 0,
-    reviews: 0,
-    images: [
-      {
-        id: 'placeholder-fp1-img',
-        url: '/assets/images/features/products/fp1.jpg',
-        alt: 'Set of striped cotton kitchen towels',
-        isPrimary: true,
-        imageType: 'cover' as const,
-      },
-    ],
-    tags: [],
-    inStock: true,
-    totalStock: 60,
-    hasVariants: false,
-    createdAt: '',
-    updatedAt: '',
-    vendorId: '',
-    isFromInventory: false,
-    baseSku: '',
-    lowStockThreshold: 0,
-    trackInventory: false,
-    dispatchTimeline: { processingDays: 0, shippingDays: 0, totalDays: 0 },
-  },
-] as unknown as PublicProduct[];
-
 /** How long one card takes to unroll. */
 const UNROLL_MS = 950;
 
@@ -179,13 +92,9 @@ export default function FeaturedProducts() {
       try {
         const response = await publicProductService.getFeaturedProducts(FEATURED_COUNT);
         if (response.success && response.data) {
-          const live = response.data.items;
-          // ⚠️ Delete this line together with PLACEHOLDER_PRODUCTS once six real
-          // products are flagged featured in the admin. It only ever tops the
-          // row up — real products always take precedence and are never
-          // displaced by a placeholder.
-          const padded = [...live, ...PLACEHOLDER_PRODUCTS].slice(0, FEATURED_COUNT);
-          setProducts(padded);
+          // Only ever the real, admin-flagged featured products — the row shows
+          // however many exist (up to FEATURED_COUNT) and nothing when none do.
+          setProducts(response.data.items);
         }
       } catch (error) {
         console.error('Error fetching featured products:', error);

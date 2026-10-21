@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { getStoredAuth } from '@/lib/auth'
+import { verifyAdminSession } from '@/lib/auth'
 import LoadingSpinner from '@/components/UI/LoadingSpinner'
 
 interface ProtectedRouteProps {
@@ -17,18 +17,16 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const auth = getStoredAuth()
-        
-        if (!auth) {
+        // Validate the session with the backend — a token existing in storage
+        // is not proof it's still valid. Only a definitive rejection blocks;
+        // an unreachable backend keeps a plausibly-live session (fails open).
+        const result = await verifyAdminSession()
+
+        if (result.status === 'invalid') {
           router.replace('/admin/login')
           return
         }
-        
-        if (!auth.user || auth.user.role.toLowerCase() !== 'admin') {
-          router.replace('/admin/login')
-          return
-        }
-        
+
         setIsAuthorized(true)
       } catch (error) {
         console.error('ProtectedRoute: Auth check error:', error)
