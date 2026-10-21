@@ -43,7 +43,7 @@ async function attachItemReturnable(orders) {
 }
 const { notifications } = require('../utils/notificationService');
 const { checkAndAlertLowStock } = require('../utils/lowStockAlert');
-const { withRetry } = require('../utils/dbRetry');
+const { withRetry, withWriteRetry } = require('../utils/dbRetry');
 const { resolveUsdRate, toINR, resolveUnitPrice } = require('../utils/orderCurrency');
 const { evaluateCoupon } = require('../utils/couponPricing');
 const { calculateLogistics, convertShippingToOrderCurrency, qualifiesForFreeShipping } = require('../utils/logistics');
@@ -874,8 +874,12 @@ const createOrder = async (req, res) => {
         // affecting order correctness.
         const stockHistoryRecords = [];
 
-        // Use transaction to ensure data integrity
-        const result = await prisma.$transaction(async (tx) => {
+        // Use transaction to ensure data integrity. Wrapped in withWriteRetry so a
+        // MongoDB write-conflict from concurrent stock decrements retries cleanly
+        // instead of 500-ing after the gateway already captured payment. Safe to
+        // retry: an aborted transaction commits nothing, and order id / paymentId
+        // idempotency are handled before this block.
+        const result = await withWriteRetry(() => prisma.$transaction(async (tx) => {
             // Create Order
             const newOrder = await tx.order.create({
                 data: {
@@ -958,12 +962,27 @@ const createOrder = async (req, res) => {
                 }
             }
 
-            // Increment coupon usedCount if a coupon was applied
+            // Increment coupon usedCount if a coupon was applied. When the coupon
+            // has a global usage limit, do the increment ATOMICALLY (conditional on
+            // usedCount < limit) so two concurrent checkouts can't both consume the
+            // last use — MongoDB serializes the conditional write, and a 0-row result
+            // means the limit was hit mid-checkout.
             if (validatedCouponCode) {
-                await tx.coupon.updateMany({
-                    where: { code: validatedCouponCode },
-                    data: { usedCount: { increment: 1 } },
-                });
+                const c = await tx.coupon.findUnique({ where: { code: validatedCouponCode }, select: { usageLimit: true } });
+                if (c?.usageLimit != null && c.usageLimit > 0) {
+                    const upd = await tx.coupon.updateMany({
+                        where: { code: validatedCouponCode, usedCount: { lt: c.usageLimit } },
+                        data: { usedCount: { increment: 1 } },
+                    });
+                    if (upd.count === 0) {
+                        throw new Error('This coupon has reached its usage limit.');
+                    }
+                } else {
+                    await tx.coupon.updateMany({
+                        where: { code: validatedCouponCode },
+                        data: { usedCount: { increment: 1 } },
+                    });
+                }
             }
 
             // Debit the wallet inside the transaction — a rollback (e.g. stock
@@ -1186,7 +1205,7 @@ const createOrder = async (req, res) => {
             // Vercel serverless cold starts and was silently failing post-payment.
             maxWait: 10000,
             timeout: 30000,
-        });
+        }));
 
         // Persist audit log entries collected during the transaction. Fire-and-
         // forget — the order is already committed, so a log-write failure must
