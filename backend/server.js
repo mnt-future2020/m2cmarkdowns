@@ -26,6 +26,7 @@ const allowedOrigins = [
   "http://localhost:3003",
   "https://m2-c-p6ikdsx.vercel.app",
   "https://m2cmarkdowns.com",
+  "https://m2cmarkdowns.in",
   "https://frontend-phi-lyart-67.vercel.app",
   "https://frontend-lhvq0vna6-salmabegam1002-3228s-projects.vercel.app",
   "https://m2c-testing.vercel.app",
