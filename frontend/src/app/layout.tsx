@@ -21,9 +21,21 @@ const playfair = Poppins({
   display: "swap",
 });
 
+// Canonical site URL per storefront — used to make the social-share image an
+// absolute URL (WhatsApp/Facebook/etc. require an absolute og:image).
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_REGION === "IN"
+    ? "https://m2cmarkdowns.in"
+    : "https://m2cmarkdowns.com";
+
+const SITE_TITLE = "M2C-Direct From Manufacturer To Customer";
+const SITE_DESCRIPTION =
+  "Wholesale products directly from manufacturers to customers with M2C's streamlined platform.";
+
 export const metadata: Metadata = {
-  title: "M2C-Direct From Manufacturer To Customer",
-  description: "Wholesale products directly from manufacturers to customers with M2C's streamlined platform.",
+  metadataBase: new URL(SITE_URL),
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
   icons: {
     icon: [
       {
@@ -41,6 +53,31 @@ export const metadata: Metadata = {
         sizes: "180x180",
       },
     ],
+  },
+  // The preview card shown when the site link is shared (WhatsApp, Facebook,
+  // LinkedIn, iMessage, etc.). Replace /public/og-image.jpg (1200×630) to change
+  // the image — no code change needed.
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    siteName: "M2C MarkDowns",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: [
+      {
+        url: "/og-image.jpg",
+        width: 1200,
+        height: 630,
+        alt: "M2C MarkDowns — Direct From Manufacturer To Customer",
+      },
+    ],
+  },
+  // X/Twitter uses its own tags; summary_large_image shows the big preview card.
+  twitter: {
+    card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: ["/og-image.jpg"],
   },
 };
 
