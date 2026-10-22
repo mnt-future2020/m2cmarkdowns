@@ -247,6 +247,9 @@ const updateLogo = async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(req.body, 'secondaryLogo')) {
       data.secondaryLogo = await uploadDataUriIfBase64(req.body.secondaryLogo, { folder: 'company' });
     }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'favicon')) {
+      data.favicon = await uploadDataUriIfBase64(req.body.favicon, { folder: 'company' });
+    }
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ success: false, error: 'No logo provided' });
     }
@@ -289,6 +292,7 @@ const getPublicCompanyInfo = async (req, res) => {
         companyName: true,
         companyLogo: true,
         secondaryLogo: true,
+        favicon: true,
         companyEmail: true,
         companyPhone: true,
         companyWebsite: true,
@@ -312,6 +316,7 @@ const getPublicCompanyInfo = async (req, res) => {
         companyName: companyInfo?.companyName || 'M2C Markdowns Pvt Ltd',
         companyLogo: companyInfo?.companyLogo || null,
         secondaryLogo: companyInfo?.secondaryLogo || null,
+        favicon: companyInfo?.favicon || null,
         companyEmail: companyInfo?.companyEmail || null,
         companyPhone: companyInfo?.companyPhone || null,
         companyWebsite: companyInfo?.companyWebsite || null,

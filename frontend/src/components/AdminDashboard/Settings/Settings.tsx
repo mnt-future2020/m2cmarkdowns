@@ -94,6 +94,7 @@ export default function Settings() {
     companyName: "M2C Markdowns Pvt Ltd",
     companyLogo: "",
     secondaryLogo: "",
+    favicon: "",
     gstNumber: "29ABCDE1234F1Z5",
     panNumber: "ABCDE1234F",
     cinNumber: "U74999KA2020PTC123456",
@@ -141,6 +142,8 @@ export default function Settings() {
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [uploadingSecondaryLogo, setUploadingSecondaryLogo] = useState(false);
   const [secondaryLogoPreview, setSecondaryLogoPreview] = useState<string | null>(null);
+  const [uploadingFavicon, setUploadingFavicon] = useState(false);
+  const [faviconPreview, setFaviconPreview] = useState<string | null>(null);
 
   // Password visibility states
   const [showRazorpaySecret, setShowRazorpaySecret] = useState(false);
@@ -204,6 +207,7 @@ export default function Settings() {
               companyName: companyResponse.data.companyName || "",
               companyLogo: companyResponse.data.companyLogo || "",
               secondaryLogo: companyResponse.data.secondaryLogo || "",
+              favicon: companyResponse.data.favicon || "",
               gstNumber: companyResponse.data.gstNumber || "",
               panNumber: companyResponse.data.panNumber || "",
               cinNumber: companyResponse.data.cinNumber || "",
@@ -485,6 +489,57 @@ export default function Settings() {
   const handleCancelSecondaryLogo = () => {
     setSecondaryLogoPreview(null);
     const fileInput = document.getElementById('secondary-logo-upload') as HTMLInputElement;
+    if (fileInput) fileInput.value = '';
+  };
+
+  // ── Favicon (browser-tab icon — square image) ──
+  const handleFaviconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Favicons are commonly PNG/ICO/SVG — accept any image type.
+    if (!file.type.startsWith('image/')) {
+      showErrorToast("Invalid File", "Please upload an image file (PNG, SVG or ICO)");
+      return;
+    }
+    // Favicons should be tiny; cap at 1MB.
+    if (file.size > 1 * 1024 * 1024) {
+      showErrorToast("File Too Large", "Please upload a favicon smaller than 1MB");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setFaviconPreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveFavicon = async () => {
+    if (!faviconPreview) return;
+
+    try {
+      setUploadingFavicon(true);
+      const response = await companyInfoService.updateFavicon(faviconPreview);
+
+      if (response.success) {
+        setCompanyInfo(prev => ({
+          ...prev,
+          favicon: response.data?.favicon || faviconPreview
+        }));
+        setFaviconPreview(null);
+        showSuccessToast("Favicon Saved", "The browser-tab icon has been updated. It may take a refresh to appear.");
+      }
+    } catch (error: any) {
+      showErrorToast("Save Failed", error.message || "Failed to save favicon");
+    } finally {
+      setUploadingFavicon(false);
+    }
+  };
+
+  const handleCancelFavicon = () => {
+    setFaviconPreview(null);
+    const fileInput = document.getElementById('favicon-upload') as HTMLInputElement;
     if (fileInput) fileInput.value = '';
   };
 
@@ -1153,6 +1208,80 @@ export default function Settings() {
                   </div>
                   {secondaryLogoPreview && (
                     <p className="text-xs text-brand-600 mt-2">Preview - Click "Save Logo" to upload</p>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Favicon — browser-tab icon */}
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-brand-100 rounded-lg">
+                  <ImageIcon className="w-5 h-5 text-brand-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900">Favicon</h3>
+              </div>
+              <p className="text-xs text-slate-500 mb-4 -mt-2">The small icon shown in the browser tab, bookmarks and history. Use a square image (PNG or SVG, 512x512px recommended). Changes may take a browser refresh to appear.</p>
+              <div className="flex items-center gap-6">
+                <div className="w-32 h-32 border-2 border-dashed border-slate-300 rounded-lg flex items-center justify-center bg-slate-50">
+                  {faviconPreview || companyInfo.favicon ? (
+                    <img
+                      src={faviconPreview || companyInfo.favicon}
+                      alt="Favicon"
+                      className="w-16 h-16 object-contain rounded"
+                    />
+                  ) : (
+                    <div className="text-center">
+                      <ImageIcon className="h-12 w-12 text-slate-400 mx-auto mb-2" />
+                      <p className="text-xs text-slate-500">No favicon</p>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <p className="text-sm text-slate-600 mb-3">Upload the favicon. Recommended size: 512x512px (square)</p>
+                  <input
+                    type="file"
+                    id="favicon-upload"
+                    accept="image/png,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,image/*"
+                    onChange={handleFaviconUpload}
+                    disabled={currentUser.role !== "super_admin" || uploadingFavicon}
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="favicon-upload"
+                      className={`flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer ${currentUser.role !== "super_admin" || uploadingFavicon || faviconPreview
+                        ? "opacity-50 cursor-not-allowed pointer-events-none"
+                        : ""
+                        }`}
+                    >
+                      <Upload className="h-4 w-4" />
+                      Choose Favicon
+                    </label>
+                    {faviconPreview && canManageSettings && (
+                      <>
+                        <button
+                          onClick={handleSaveFavicon}
+                          disabled={uploadingFavicon}
+                          className="flex items-center gap-2 px-4 py-2 bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Save className="h-4 w-4" />
+                          {uploadingFavicon ? "Saving..." : "Save Favicon"}
+                        </button>
+                        <button
+                          onClick={handleCancelFavicon}
+                          disabled={uploadingFavicon}
+                          className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {faviconPreview && (
+                    <p className="text-xs text-brand-600 mt-2">Preview - Click "Save Favicon" to upload</p>
                   )}
                 </div>
               </div>

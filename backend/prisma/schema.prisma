@@ -2029,6 +2029,7 @@ model CompanyInfo {
   companyName    String
   companyLogo    String? // Primary logo — home, contact, about, terms, privacy, returns
   secondaryLogo  String? // Secondary logo — shown in the header on all other pages
+  favicon        String? // Browser-tab icon (favicon) — square image, shown in tabs/bookmarks
   companyEmail   String?
   companyPhone   String?
   companyWebsite String?

@@ -127,6 +127,7 @@ const MainFooterContent = () => {
     companyName: 'M2C Markdowns Pvt Ltd',
     companyLogo: null,
     secondaryLogo: null,
+    favicon: null,
     companyEmail: null,
     companyPhone: null,
     companyWebsite: null,

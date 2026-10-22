@@ -71,6 +71,7 @@ export interface PublicCompanyInfo {
   companyName: string;
   companyLogo: string | null;
   secondaryLogo: string | null;
+  favicon: string | null;
   companyEmail: string | null;
   companyPhone: string | null;
   companyWebsite: string | null;
@@ -89,6 +90,7 @@ const DEFAULT_INFO: PublicCompanyInfo = {
   companyName: 'M2C Markdowns Pvt Ltd',
   companyLogo: null,
   secondaryLogo: null,
+  favicon: null,
   companyEmail: null,
   companyPhone: null,
   companyWebsite: null,
@@ -191,6 +193,16 @@ export const companyInfoService = {
       return response.data;
     } catch (error: any) {
       throw new Error(error.message || 'Failed to update secondary logo');
+    }
+  },
+
+  // Update favicon (browser-tab icon — square image)
+  updateFavicon: async (favicon: string) => {
+    try {
+      const response = await axios.put('/company-info/logo', { favicon });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(error.message || 'Failed to update favicon');
     }
   },
 
