@@ -86,6 +86,10 @@ export default function Settings() {
   // Profile photo (upload + crop). `profileImage` is the saved URL or a freshly
   // cropped base64 preview; the crop modal opens with the chosen file.
   const [profileImage, setProfileImage] = useState<string>("");
+  // Falls back to the placeholder icon if the photo URL fails to load (CDN hiccup,
+  // deleted asset) instead of showing a blank/broken image. Reset on every new URL.
+  const [profileImgBroken, setProfileImgBroken] = useState(false);
+  useEffect(() => { setProfileImgBroken(false); }, [profileImage]);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [cropFileName, setCropFileName] = useState("");
 
@@ -790,8 +794,13 @@ export default function Settings() {
                   title={isReadOnly ? undefined : 'Upload profile photo'}
                 >
                   <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center overflow-hidden border border-slate-200">
-                    {profileImage ? (
-                      <img src={profileImage} alt="Profile" className="w-full h-full rounded-full object-cover" />
+                    {profileImage && !profileImgBroken ? (
+                      <img
+                        src={profileImage}
+                        alt="Profile"
+                        onError={() => setProfileImgBroken(true)}
+                        className="w-full h-full rounded-full object-cover"
+                      />
                     ) : (
                       <User className="h-10 w-10 text-slate-400" />
                     )}
