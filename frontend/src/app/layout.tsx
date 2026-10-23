@@ -33,21 +33,13 @@ const SITE_TITLE = "M2C-Direct From Manufacturer To Customer";
 const SITE_DESCRIPTION =
   "Wholesale products directly from manufacturers to customers with M2C's streamlined platform.";
 
-// Static default favicon rendered on the server for every route (consistent and
-// cacheable). The *admin-uploaded* favicon is applied on the client by
-// <FaviconManager/> so it stays in sync across all portals — fetching it here in
-// generateMetadata cached a different stale value per route, which is exactly
-// how the storefront and admin ended up showing different favicons.
-const DEFAULT_ICONS: Metadata["icons"] = {
-  icon: [{ url: "/assets/logo/m2c-logo.png" }],
-  apple: [{ url: "/assets/logo/m2c-logo.png", sizes: "180x180" }],
-};
-
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: SITE_TITLE,
   description: SITE_DESCRIPTION,
-  icons: DEFAULT_ICONS,
+  // No static favicon is declared here: the favicon is admin-uploaded (Settings →
+  // Company Info) and applied on the client by <FaviconManager/>, which keeps it
+  // in sync across every portal. There is no bundled icon file to fall back to.
   // The preview card shown when the site link is shared (WhatsApp, Facebook,
   // LinkedIn, iMessage, etc.). Replace /public/og-image.jpg (1200×630) to change
   // the image — no code change needed.

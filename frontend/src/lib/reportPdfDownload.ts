@@ -1,5 +1,6 @@
 import html2canvas from "html2canvas-pro"
 import { jsPDF } from "jspdf"
+import { companyInfoService } from "@/services/companyInfoService"
 
 // Brand color: #222222 → RGB(34, 34, 34)
 const BRAND_R = 34
@@ -7,7 +8,6 @@ const BRAND_G = 34
 const BRAND_B = 34
 
 const COMPANY_NAME = "M 2 C Markdowns Pvt Ltd"
-const LOGO_PATH = "/assets/logo/m2c-logo.png"
 
 interface DownloadReportPdfOptions {
   element: HTMLElement
@@ -90,10 +90,15 @@ export async function downloadReportPdf({
   inspectorName,
   downloadedBy,
 }: DownloadReportPdfOptions): Promise<void> {
-  // Load logo
+  // Load the admin-uploaded company logo (DB-driven; there is no bundled logo
+  // file). If none is set or it can't be loaded for canvas use, continue
+  // without a logo.
   let logoData: string | null = null
   try {
-    logoData = await loadImageAsDataUrl(LOGO_PATH)
+    const info = await companyInfoService.getPublicCompanyInfo()
+    if (info?.companyLogo) {
+      logoData = await loadImageAsDataUrl(info.companyLogo)
+    }
   } catch {
     // Continue without logo
   }

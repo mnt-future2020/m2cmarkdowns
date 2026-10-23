@@ -27,7 +27,6 @@
  */
 
 import { useEffect, useState } from 'react';
-import Image from 'next/image';
 import { companyInfoService } from '@/services/companyInfoService';
 
 // Both admin-uploaded logos are fetched together and cached for the session.
@@ -35,7 +34,7 @@ import { companyInfoService } from '@/services/companyInfoService';
 //   secondary → secondaryLogo (header on all other pages)
 // A `null` field means the admin hasn't uploaded that logo; the secondary
 // variant then falls back to the primary, and finally to the bundled asset.
-interface LogoPair { companyLogo: string | null; secondaryLogo: string | null; }
+interface LogoPair { companyLogo: string | null; secondaryLogo: string | null; companyName: string | null; }
 // `undefined` = not yet fetched (consumers should render the skeleton)
 let cachedLogos: LogoPair | undefined = undefined;
 let inflightFetch: Promise<LogoPair> | null = null;
@@ -46,11 +45,11 @@ function loadCompanyLogos(): Promise<LogoPair> {
   inflightFetch = companyInfoService
     .getPublicCompanyInfo()
     .then(info => {
-      cachedLogos = { companyLogo: info.companyLogo ?? null, secondaryLogo: info.secondaryLogo ?? null };
+      cachedLogos = { companyLogo: info.companyLogo ?? null, secondaryLogo: info.secondaryLogo ?? null, companyName: info.companyName ?? null };
       return cachedLogos;
     })
     .catch(() => {
-      cachedLogos = { companyLogo: null, secondaryLogo: null };
+      cachedLogos = { companyLogo: null, secondaryLogo: null, companyName: null };
       return cachedLogos;
     })
     .finally(() => {
@@ -144,16 +143,17 @@ export default function CompanyLogo({
     return <img src={logoUrl} alt={alt} className={className} />;
   }
 
-  // No admin-uploaded logo — fall back to the bundled file.
+  // No admin-uploaded logo — render the company name as a text wordmark.
+  // There is no bundled logo file to fall back to (logos are DB-driven, set in
+  // Settings → Company Info), so a text wordmark avoids a broken image while
+  // still showing the brand. In practice a logo is almost always uploaded.
   return (
-    <Image
-      src="/assets/logo/m2c-logo.png"
-      alt={alt}
-      width={fallbackWidth}
-      height={fallbackHeight}
-      sizes={fallbackSizes}
-      className={className}
-      priority={priority}
-    />
+    <span
+      className={`${className ?? ''} inline-flex items-center font-semibold whitespace-nowrap`}
+      role="img"
+      aria-label={alt}
+    >
+      {logos?.companyName || 'M2C Markdowns'}
+    </span>
   );
 }
