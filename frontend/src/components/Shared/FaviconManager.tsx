@@ -40,18 +40,28 @@ export default function FaviconManager() {
 
 function applyFavicon(href: string) {
   if (typeof document === 'undefined') return;
-  // Drop any existing icon links (the SSR default + prior ones) so the browser
-  // picks up the fresh one rather than keeping the old match.
-  document
-    .querySelectorAll('link[rel~="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]')
-    .forEach((el) => el.remove());
 
-  const add = (rel: string) => {
-    const link = document.createElement('link');
-    link.rel = rel;
-    link.href = href;
-    document.head.appendChild(link);
+  // IMPORTANT: never remove the <link> nodes Next.js/React renders from the
+  // route metadata. Detaching React-managed DOM makes React later call
+  // removeChild on a now-null parent, which crashes client-side navigation
+  // ("Cannot read properties of null (reading 'removeChild')"): the URL changes
+  // but the page won't swap until a full refresh.
+  //
+  // Instead we own a single pair of icon links (tagged data-m2c-favicon) and
+  // only ever touch those. A later icon link wins in the browser, so ours
+  // overrides the SSR default without removing it.
+  const upsert = (rel: string) => {
+    let link = document.head.querySelector<HTMLLinkElement>(
+      `link[data-m2c-favicon][rel="${rel}"]`,
+    );
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = rel;
+      link.setAttribute('data-m2c-favicon', '');
+      document.head.appendChild(link);
+    }
+    if (link.href !== href) link.href = href;
   };
-  add('icon');
-  add('apple-touch-icon');
+  upsert('icon');
+  upsert('apple-touch-icon');
 }
