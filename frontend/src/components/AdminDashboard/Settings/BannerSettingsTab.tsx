@@ -10,12 +10,15 @@ import { hasPermission } from '@/lib/auth';
 import BannerCropModal from './BannerCropModal';
 import DeleteConfirmModal from '@/components/UI/DeleteConfirmModal';
 
-// Banner display spec — the homepage hero is full-bleed (100vw) with fixed heights
-// per breakpoint, so it renders at roughly 3.5 : 1 on desktop. Uploads are cropped
-// to this exact ratio before saving, so there's no aspect-ratio guesswork.
-const REC_WIDTH = 2800;
+// Banner display spec — must match the homepage hero's frame ratio so the crop
+// the admin sees is exactly what the storefront shows (WYSIWYG). The hero frame
+// is held at 3 : 1 (BANNER_RATIO in HeroSection.tsx, a single ratio across every
+// breakpoint); cropping uploads to that same ratio means object-cover never
+// re-crops the image on the storefront. If HeroSection's BANNER_RATIO changes,
+// change these to match.
+const REC_WIDTH = 2400;
 const REC_HEIGHT = 800;
-const TARGET_RATIO = REC_WIDTH / REC_HEIGHT; // 3.5 : 1
+const TARGET_RATIO = REC_WIDTH / REC_HEIGHT; // 3 : 1 — matches HeroSection BANNER_RATIO
 
 // Link-type options for the "Link to" dropdown.
 const LINK_TYPE_OPTIONS = [
@@ -529,7 +532,7 @@ export default function BannerSettingsTab() {
                                         Recommended size: {REC_WIDTH} × {REC_HEIGHT} px (aspect ratio {TARGET_RATIO.toFixed(1)} : 1)
                                     </p>
                                     <ul className="text-brand-700 mt-1 list-disc pl-4 space-y-0.5">
-                                        <li>After you pick an image, a <strong>crop tool opens</strong> — position &amp; zoom to the frame, which is locked to the live banner ratio.</li>
+                                        <li>After you pick an image, a <strong>crop tool opens</strong> — position &amp; zoom to the frame, which is locked to the live banner ratio ({REC_WIDTH} × {REC_HEIGHT} px, {TARGET_RATIO.toFixed(1)} : 1).</li>
                                         <li>Use a <strong>wide landscape</strong> image so there's room to crop cleanly.</li>
                                         <li>Keep text, logos &amp; key products in the <strong>centre</strong> — outer edges may be cropped on very wide screens.</li>
                                         <li>Format: <strong>JPG, PNG or WebP</strong> · keep under 5MB for fast loading.</li>
@@ -569,7 +572,7 @@ export default function BannerSettingsTab() {
                                                 Click to upload banner image
                                             </p>
                                             <p className="text-xs text-slate-400 mt-1">
-                                                JPG, PNG or WebP · up to 5MB · crop opens after selecting
+                                                {REC_WIDTH} × {REC_HEIGHT} px · JPG, PNG or WebP · up to 5MB · crop opens after selecting
                                             </p>
                                         </div>
                                     )}
