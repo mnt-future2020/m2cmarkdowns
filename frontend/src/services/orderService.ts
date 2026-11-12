@@ -154,6 +154,12 @@ export interface Order {
     trackingReference?: string;
     /** Courier partner id chosen at ship-to-customer (resolve via lib/couriers). */
     courier?: string | null;
+    /** Live-courier (Delhivery) shipment fields — set when the admin creates a
+     *  Delhivery shipment for an INR order. trackingReference then holds the AWB. */
+    shippingProvider?: string | null;
+    shippingLabelUrl?: string | null;
+    lastCourierStatus?: string | null;
+    lastCourierStatusAt?: string | null;
     /** Cancel/return/refund state. */
     cancelReason?: string | null;
     returnRequest?: { reason?: string; status?: 'Requested' | 'Approved' | 'Rejected'; requestedAt?: string; decidedAt?: string; note?: string } | null;

@@ -32,7 +32,7 @@ import { formatPrice } from '@/lib/currency'
 import { orderGstRows } from '@/lib/gst'
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils'
 import { courierService } from "@/services/courierService"
-import { courierName, courierTrackingUrl } from "@/lib/couriers"
+import { courierName, courierTrackingUrl, courierDisplayName, orderTrackingUrl } from "@/lib/couriers"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/UI/Card"
 import Reveal from "@/components/WebSite/Shared/Reveal"
 import orderService, { Order as APIOrder } from "@/services/orderService"
@@ -606,7 +606,7 @@ export default function OrderDetail({ orderId }: OrderDetailProps) {
                     <div>
                       <p className="text-xs uppercase tracking-wide text-slate-500">Courier Partner</p>
                       <p className="mt-1 text-sm font-semibold text-slate-900">
-                        {orderDetails.courier ? courierName(orderDetails.courier) : '—'}
+                        {courierDisplayName({ shippingProvider: (orderDetails as any).shippingProvider, courier: orderDetails.courier }) || '—'}
                       </p>
                     </div>
                     <div>
@@ -616,17 +616,22 @@ export default function OrderDetail({ orderId }: OrderDetailProps) {
                       </p>
                     </div>
                   </div>
-                  {courierTrackingUrl(orderDetails.courier, orderDetails.trackingReference) && (
-                    <a
-                      href={courierTrackingUrl(orderDetails.courier, orderDetails.trackingReference) as string}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-[#e01a1b] hover:underline"
-                    >
-                      Track on {orderDetails.courier ? courierName(orderDetails.courier) : 'courier'} website
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
-                  )}
+                  {(() => {
+                    const provider = (orderDetails as any).shippingProvider;
+                    const url = orderTrackingUrl({ shippingProvider: provider, courier: orderDetails.courier, trackingReference: orderDetails.trackingReference });
+                    const name = courierDisplayName({ shippingProvider: provider, courier: orderDetails.courier });
+                    return url ? (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-[#e01a1b] hover:underline"
+                      >
+                        Track on {name || 'courier'} website
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    ) : null;
+                  })()}
                 </CardContent>
               </Card>
             )}

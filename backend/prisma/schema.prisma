@@ -1483,9 +1483,20 @@ model Order {
   // NOTE: status is now a computed aggregate of all VendorShipment statuses.
   // It is persisted for backward compatibility and efficient queries.
   status            OrderStatus @default(ORDER_CREATED)
-  trackingReference String? // Customer-facing tracking ID entered at ship-to-customer time
+  trackingReference String? // Customer-facing tracking ID / AWB (manual entry OR Delhivery-generated)
   // Courier partner (DB Courier id) chosen for the final hub→customer leg.
   courier           String?
+
+  // ── Live courier integration (Delhivery B2C) ────────────────────────────
+  // Set when the hub→customer leg is fulfilled through a live courier API rather
+  // than manual tracking entry. shippingProvider identifies the carrier
+  // ('delhivery'); the AWB lands in trackingReference above. shippingLabelUrl is
+  // the stored label PDF; lastCourierStatus/At cache the latest synced scan.
+  shippingProvider   String?
+  shippingLabelUrl   String?
+  pickupScheduledAt  DateTime?
+  lastCourierStatus  String?
+  lastCourierStatusAt DateTime?
 
   // ── Cancellation / Return / Refund ──────────────────────────────────────
   cancelReason  String? // Reason the customer/admin gave when cancelling
@@ -2016,6 +2027,49 @@ model PaymentSettings {
   updatedAt DateTime @updatedAt
 
   @@map("payment_settings")
+}
+
+// Live courier (shipping-carrier API) integration — currently Delhivery B2C.
+// Singleton (findFirst/create). When `enabled` AND `connected`, the hub→customer
+// dispatch for IN (INR) orders is fulfilled through the carrier API (auto AWB,
+// label, tracking) and the MANUAL courier+tracking entry is disabled for those
+// orders. International (.com/USD) orders always keep the manual method.
+model CourierIntegration {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  provider    String  @default("delhivery") // carrier key (room for more later)
+  enabled     Boolean @default(false)       // admin master switch
+  connected   Boolean @default(false)       // last test-connection succeeded
+
+  // Credentials / config (entered in Settings → Live Courier).
+  apiToken    String? // Delhivery API token (from one.delhivery.com API setup)
+  pickupName  String? // registered pickup/warehouse name in the Delhivery panel
+  originPincode String? // dispatch origin pincode — used for live rate quotes
+  environment String  @default("staging")   // 'staging' | 'production'
+  clientName  String? // Delhivery client/registered name (used by some endpoints)
+
+  // Default parcel dims/weight fallback when a product carries none (grams / cm).
+  defaultWeightGrams Int @default(500)
+  defaultLengthCm    Int @default(15)
+  defaultWidthCm     Int @default(15)
+  defaultHeightCm    Int @default(10)
+
+  // Also use the carrier's live rate API to price shipping at checkout.
+  useLiveRates Boolean @default(false)
+
+  // Shared secret for the Delhivery status webhook. The webhook URL carries this
+  // as ?secret=... ; a request whose secret doesn't match is rejected. Rotate by
+  // regenerating. Blank = webhook disabled.
+  webhookSecret String?
+
+  lastTestAt   DateTime?
+  lastTestError String?
+
+  updatedBy String?  @db.ObjectId
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("courier_integration")
 }
 
 // ============================================

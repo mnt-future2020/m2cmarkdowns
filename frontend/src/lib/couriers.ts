@@ -130,3 +130,27 @@ export function courierTrackingUrl(id?: string | null, trackingId?: string | nul
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
   return url;
 }
+
+// ── Live-courier providers (fulfilled via a carrier API, e.g. Delhivery) ──────
+// An order shipped by a live courier carries `shippingProvider` instead of a
+// manual Courier id. These map the provider to its display name + public tracking
+// page (the AWB lives in the order's trackingReference).
+const LIVE_PROVIDER_NAME: Record<string, string> = { delhivery: 'Delhivery' };
+const LIVE_PROVIDER_TRACK: Record<string, (awb: string) => string> = {
+  delhivery: (awb) => `https://www.delhivery.com/track/package/${encodeURIComponent(awb)}`,
+};
+
+/** Display name for an order's courier — the live provider (Delhivery) or the manual courier. */
+export function courierDisplayName(opts: { shippingProvider?: string | null; courier?: string | null }): string {
+  const prov = (opts.shippingProvider || '').toLowerCase();
+  if (prov && LIVE_PROVIDER_NAME[prov]) return LIVE_PROVIDER_NAME[prov];
+  return courierName(opts.courier) || '';
+}
+
+/** Public tracking-page URL for an order — the live provider's page, else the manual courier's. */
+export function orderTrackingUrl(opts: { shippingProvider?: string | null; courier?: string | null; trackingReference?: string | null }): string | null {
+  const prov = (opts.shippingProvider || '').toLowerCase();
+  const awb = (opts.trackingReference || '').trim();
+  if (prov && LIVE_PROVIDER_TRACK[prov] && awb) return LIVE_PROVIDER_TRACK[prov](awb);
+  return courierTrackingUrl(opts.courier, opts.trackingReference);
+}

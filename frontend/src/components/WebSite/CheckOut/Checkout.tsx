@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { calculateLogistics, type LogisticsConfig } from "@/lib/logistics"
 import { formatPrice, getCurrency, getRegion, getRegionalPrice, getRegionalOriginalPrice, convertUSDtoINR, convertINRtoUSD } from '@/lib/currency'
+import courierIntegrationService from '@/services/courierIntegrationService'
 import { isIntrastate, gstRateRows } from '@/lib/gst'
 import { companyInfoService } from '@/services/companyInfoService'
 import { applyOfferToPrice, type ActiveOffer } from '@/lib/offers'
@@ -205,6 +206,38 @@ export default function Checkout() {
   // during render (the repo forbids impure calls there).
   const [deliveryEstimate, setDeliveryEstimate] = useState<{ days: number; dateLabel: string; mode?: 'AIR' | 'SHIP' } | null>(null)
 
+  // When the live courier integration (Delhivery) is active for India, it assigns the
+  // carrier, so India (INR) lines don't carry a manually-chosen courier. Don't block
+  // order placement on a missing courier in that case. International is unchanged.
+  const [liveCourierActiveIN, setLiveCourierActiveIN] = useState(false)
+  const [useLiveRatesIN, setUseLiveRatesIN] = useState(false)
+  useEffect(() => {
+    courierIntegrationService.getPublicStatus()
+      .then((res) => { setLiveCourierActiveIN(!!res?.data?.liveActiveIN); setUseLiveRatesIN(!!res?.data?.useLiveRates) })
+      .catch(() => { setLiveCourierActiveIN(false); setUseLiveRatesIN(false) })
+  }, [])
+  const courierPickerHidden = liveCourierActiveIN && getRegion() === 'IN'
+
+  // Live Delhivery shipping rate for India orders (replaces the weight-based rate).
+  // Fetched once a 6-digit delivery pincode is known; null → use the manual rate.
+  // The backend computes the cart weight the same way createOrder does, so this
+  // figure, the payment amount, and the final order all match.
+  const [liveShipInr, setLiveShipInr] = useState<number | null>(null)
+  useEffect(() => {
+    if (!useLiveRatesIN || getRegion() !== 'IN' || !cartItems.length) { setLiveShipInr(null); return }
+    const pin = (formData.zipCode || '').trim()
+    if (!/^\d{6}$/.test(pin)) { setLiveShipInr(null); return }
+    let cancelled = false
+    courierIntegrationService.getCartLiveRate(pin)
+      .then((res) => {
+        if (cancelled) return
+        const d = res?.data
+        setLiveShipInr(d?.liveRate && typeof d.shippingInr === 'number' ? d.shippingInr : null)
+      })
+      .catch(() => { if (!cancelled) setLiveShipInr(null) })
+    return () => { cancelled = true }
+  }, [useLiveRatesIN, formData.zipCode, cartItems])
+
   useEffect(() => {
     if (!cartItems.length) { setDeliveryEstimate(null); return }
     let maxDays = 0
@@ -250,7 +283,7 @@ export default function Checkout() {
 
   useEffect(() => {
     calculateTotals()
-  }, [cartItems, formData.shippingMethod, discountAmount, freeShippingApplied, delivery.feeOrderCcy, delivery.taxOrderCcy])
+  }, [cartItems, formData.shippingMethod, discountAmount, freeShippingApplied, delivery.feeOrderCcy, delivery.taxOrderCcy, liveShipInr])
 
   // Destination delivery-zone quote: serviceability + flat fee + shipping GST.
   // Runs when the shipping address or the weight-based shipping changes. INR
@@ -259,7 +292,7 @@ export default function Checkout() {
     const country = formData.country, state = formData.state, city = formData.city
     if (!country || !state || !city) { setDelivery({ checked: false, serviceable: true, feeOrderCcy: 0, taxOrderCcy: 0, gstPct: 0 }); return }
     let cancelled = false
-    deliveryZoneService.quote({ country, state, city, weightShippingInr: weightShipInr, freeShipping: freeShippingApplied })
+    deliveryZoneService.quote({ country, state, city, pincode: formData.zipCode, currency: getCurrency(), weightShippingInr: weightShipInr, freeShipping: freeShippingApplied })
       .then((q) => {
         if (cancelled) return
         if (!q.serviceable) { setDelivery({ checked: true, serviceable: false, feeOrderCcy: 0, taxOrderCcy: 0, gstPct: 0 }); return }
@@ -272,7 +305,7 @@ export default function Checkout() {
         })
       })
     return () => { cancelled = true }
-  }, [formData.country, formData.state, formData.city, weightShipInr, freeShippingApplied])
+  }, [formData.country, formData.state, formData.city, formData.zipCode, weightShipInr, freeShippingApplied])
 
   // Load the customer's wallet balance so it can be offered at checkout.
   useEffect(() => {
@@ -491,6 +524,7 @@ export default function Checkout() {
     const types = (item.product as any)?.logisticsConfig?.transportTypes
     if (!Array.isArray(types) || types.length === 0) return false
     if (types.length > 1 && !(item as any).transportType) return true
+    if (courierPickerHidden) return false // live India integration assigns the carrier
     return !(item as any).courier
   })
 
@@ -730,7 +764,9 @@ export default function Checkout() {
       }
     }
     // Lift the weight-based shipping (INR) so the delivery-zone quote effect can use it.
-    const weightInr = freeShippingApplied ? 0 : logisticsShippingInr;
+    // When Delhivery live rates are active for India, the carrier's quote REPLACES the
+    // weight-based rate (the zone flat fee + GST still apply on top, as on the server).
+    const weightInr = freeShippingApplied ? 0 : (liveShipInr != null ? liveShipInr : logisticsShippingInr);
     setWeightShipInr(weightInr);
     const weightShipCcy = r2line(getCurrency() === 'USD' ? convertINRtoUSD(weightInr) : weightInr);
     // Final shipping = weight rate + the destination zone's flat fee (converted).
@@ -1125,7 +1161,7 @@ export default function Checkout() {
   )
 
   const renderReview = () => (
-    <ReviewOrder formData={formData} deliveryEstimate={deliveryEstimate} />
+    <ReviewOrder formData={formData} deliveryEstimate={courierPickerHidden ? null : deliveryEstimate} liveCourier={courierPickerHidden} />
   )
 
   if (loading) {

@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { ArrowLeft, Package, CreditCard, User, MapPin, Truck, Star, CheckCircle, XCircle, AlertTriangle, RotateCcw } from "lucide-react";
+import { ArrowLeft, Package, CreditCard, User, MapPin, Truck, Star, CheckCircle, XCircle, AlertTriangle, RotateCcw, ExternalLink, MapPinned } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { showSuccessToast, showErrorToast } from "@/lib/toast-utils";
 import { orderService, Order, VendorShipment } from "@/services/orderService";
 import { courierService, type Courier } from "@/services/courierService";
+import courierIntegrationService from "@/services/courierIntegrationService";
 import { courierName, transportModeLabel } from "@/lib/couriers";
 import adminProductService from "@/services/adminProductService";
 import Dropdown from "@/components/UI/Dropdown";
@@ -96,6 +97,22 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
   const [shipCourier, setShipCourier] = useState("");
   const [shipTracking, setShipTracking] = useState("");
   const [submittingShip, setSubmittingShip] = useState(false);
+
+  // Live courier (Delhivery) — whether integration is on+connected. When it is and
+  // the order is an India (INR) order, dispatch goes through Delhivery: the admin
+  // creates a shipment (AWB) here instead of entering a courier + tracking ID by hand.
+  const [courierSettings, setCourierSettings] = useState<{ enabled: boolean; connected: boolean } | null>(null);
+  const [creatingShipment, setCreatingShipment] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState(false);
+  const [trackingShipment, setTrackingShipment] = useState(false);
+  const [cancellingShipment, setCancellingShipment] = useState(false);
+  const [trackInfo, setTrackInfo] = useState<{
+    found?: boolean;
+    status?: string;
+    statusDateTime?: string;
+    instructions?: string;
+    scans?: any[];
+  } | null>(null);
   // Return-request review.
   const [returnDeciding, setReturnDeciding] = useState(false);
   const [showReject, setShowReject] = useState(false);
@@ -162,6 +179,19 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
   useEffect(() => {
     fetchOrderDetails();
   }, [orderId]);
+
+  // Load live-courier integration state once — tells us whether dispatch is manual
+  // (courier + tracking ID) or via Delhivery (create shipment → AWB).
+  useEffect(() => {
+    courierIntegrationService
+      .getSettings()
+      .then((res) => {
+        if (res?.success && res.data) {
+          setCourierSettings({ enabled: !!res.data.enabled, connected: !!res.data.connected });
+        }
+      })
+      .catch(() => setCourierSettings(null));
+  }, []);
 
   // Load the region's courier partners for the dispatch dropdown.
   useEffect(() => {
@@ -247,13 +277,19 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
   };
 
   const handleConfirmShip = async () => {
-    if (!shipCourier) {
-      showErrorToast("Please select a courier partner.");
-      return;
-    }
-    if (!shipTracking.trim()) {
-      showErrorToast("Please enter the tracking ID.");
-      return;
+    // Live courier (Delhivery) orders ship against the stored AWB — the backend
+    // rejects manual courier/tracking values, so we send none. Manual orders still
+    // require a courier partner + tracking ID.
+    const live = !!courierSettings?.enabled && !!courierSettings?.connected && order?.currency === "INR";
+    if (!live) {
+      if (!shipCourier) {
+        showErrorToast("Please select a courier partner.");
+        return;
+      }
+      if (!shipTracking.trim()) {
+        showErrorToast("Please enter the tracking ID.");
+        return;
+      }
     }
     try {
       setSubmittingShip(true);
@@ -261,7 +297,7 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
         orderId,
         "SHIPPED_TO_CUSTOMER",
         undefined,
-        { courier: shipCourier, trackingReference: shipTracking.trim() },
+        live ? undefined : { courier: shipCourier, trackingReference: shipTracking.trim() },
       );
       if (res.success) {
         showSuccessToast("Order shipped to customer — tracking details sent");
@@ -272,6 +308,100 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
       showErrorToast(error.message || "Failed to update order status");
     } finally {
       setSubmittingShip(false);
+    }
+  };
+
+  // ── Live courier (Delhivery) per-order operations ──────────────────────────
+  // Create the Delhivery shipment — generates the AWB the backend then uses to
+  // mark the order shipped. Refreshes the order so the AWB/label surface here.
+  const handleCreateShipment = async () => {
+    if (!order) return;
+    try {
+      setCreatingShipment(true);
+      const res = await courierIntegrationService.createShipment(order.id);
+      if (res.success) {
+        showSuccessToast(res.message || `Shipment created — AWB ${res.data?.awb}`);
+        await fetchOrderDetails();
+      } else {
+        showErrorToast(res.message || "Failed to create shipment");
+      }
+    } catch (error: any) {
+      showErrorToast(error.response?.data?.error || error.message || "Failed to create shipment");
+    } finally {
+      setCreatingShipment(false);
+    }
+  };
+
+  // Open the Delhivery label. Uses the stored URL when present, else (re)fetches it.
+  const handleDownloadLabel = async () => {
+    if (!order) return;
+    if (order.shippingLabelUrl) {
+      window.open(order.shippingLabelUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      setLoadingLabel(true);
+      const res = await courierIntegrationService.getLabel(order.id);
+      const url = res?.data?.labelUrl;
+      if (res.success && url) {
+        window.open(url, "_blank", "noopener,noreferrer");
+        setOrder((prev) => (prev ? { ...prev, shippingLabelUrl: url } : prev));
+      } else {
+        showErrorToast("Label is not available yet");
+      }
+    } catch (error: any) {
+      showErrorToast(error.response?.data?.error || error.message || "Failed to fetch label");
+    } finally {
+      setLoadingLabel(false);
+    }
+  };
+
+  // Pull the latest tracking status + scan history from Delhivery.
+  const handleTrackShipment = async () => {
+    if (!order) return;
+    try {
+      setTrackingShipment(true);
+      const res = await courierIntegrationService.track(order.id);
+      if (res.success) {
+        setTrackInfo(res.data || null);
+        const latest = res.data?.status;
+        showSuccessToast(latest ? `Latest status: ${latest}` : "Tracking refreshed");
+        // Keep the small status line in sync without a full refetch.
+        if (latest) {
+          setOrder((prev) =>
+            prev ? { ...prev, lastCourierStatus: latest, lastCourierStatusAt: new Date().toISOString() } : prev,
+          );
+        }
+      } else {
+        showErrorToast("Failed to track shipment");
+      }
+    } catch (error: any) {
+      showErrorToast(error.response?.data?.error || error.message || "Failed to track shipment");
+    } finally {
+      setTrackingShipment(false);
+    }
+  };
+
+  // Cancel (RTO) the Delhivery shipment after confirmation.
+  const handleCancelShipment = async () => {
+    if (!order) return;
+    if (!window.confirm(`Cancel the Delhivery shipment for AWB ${order.trackingReference}? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      setCancellingShipment(true);
+      const res = await courierIntegrationService.cancelShipment(order.id);
+      if (res.success) {
+        showSuccessToast(res.message || "Shipment cancelled");
+        setTrackInfo(null);
+        await fetchOrderDetails();
+      } else {
+        showErrorToast(res.message || "Failed to cancel shipment");
+      }
+    } catch (error: any) {
+      showErrorToast(error.response?.data?.error || error.message || "Failed to cancel shipment");
+    } finally {
+      setCancellingShipment(false);
     }
   };
 
@@ -322,7 +452,18 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
   const atHubAwaitingReviewCount = nonCancelledShipments.filter((s) => s.status === 'RECEIVED_AT_ADMIN_HUB').length;
   const rejectedShipmentCount = nonCancelledShipments.filter((s) => s.status === 'REJECTED_BY_ADMIN_HUB').length;
   const isTerminal = status === 'CANCELLED' || status === 'RETURNED';
-  const canMarkOutForDelivery = ['RECEIVED_AT_ADMIN_HUB', 'APPROVED_BY_ADMIN_HUB'].includes(status) && canShipToCustomer && !hasRejectedShipment;
+
+  // Live courier (Delhivery) is in play only when the integration is on + connected
+  // AND this is an India (INR) order. International / live-off orders keep the manual
+  // courier + tracking-ID dispatch flow untouched.
+  const liveActive = !!courierSettings?.enabled && !!courierSettings?.connected && order.currency === 'INR';
+  // A Delhivery AWB exists once a shipment has been created for this order.
+  const hasAwb = !!order.trackingReference && order.shippingProvider === 'delhivery';
+
+  const atShipStage = ['RECEIVED_AT_ADMIN_HUB', 'APPROVED_BY_ADMIN_HUB'].includes(status) && canShipToCustomer && !hasRejectedShipment;
+  // For live orders the admin must create the Delhivery shipment (AWB) before the
+  // order can be marked out for delivery — the backend ships against the stored AWB.
+  const canMarkOutForDelivery = atShipStage && (!liveActive || hasAwb);
   // Show the "Mark Out for Delivery" affordance for any pre-shipped, non-terminal state so
   // admin sees the next action up front. Disabled state + tooltip explains the blocker.
   const showOutForDeliveryButton = !isTerminal && status !== 'SHIPPED_TO_CUSTOMER' && status !== 'DELIVERED';
@@ -399,6 +540,7 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
     }
     if (hasRejectedShipment) return 'One or more vendor shipments are rejected. Resolve them before shipping.';
     if (!canShipToCustomer) return 'All vendor shipments must be approved at the hub before delivery.';
+    if (liveActive && !hasAwb) return 'Create the Delhivery shipment (AWB) below before marking this order out for delivery.';
     return '';
   })();
 
@@ -473,6 +615,128 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
               {actionBanner.message}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Live Courier (Delhivery) dispatch — shown only for INR orders when the
+          integration is on + connected. Replaces the manual courier + tracking-ID
+          dispatch: the admin creates the Delhivery shipment (AWB) here, then marks
+          the order out for delivery (the backend ships against the stored AWB). */}
+      {liveActive && (atShipStage || hasAwb) && hasPermission('hub_to_customer:update_status') && (
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+          <div className="flex items-center gap-2 mb-4">
+            <Truck className="h-5 w-5 text-orange-600" />
+            <h2 className="text-lg font-semibold text-slate-900">Live Courier — Delhivery</h2>
+          </div>
+
+          {/* Last known courier status (from the latest track / cancel) */}
+          {order.lastCourierStatus && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+              <MapPinned className="h-4 w-4 text-slate-500 shrink-0" />
+              <p className="text-sm text-slate-700">
+                <span className="font-medium">{order.lastCourierStatus}</span>
+                {order.lastCourierStatusAt && (
+                  <span className="text-slate-400"> · {formatTimelineDate(order.lastCourierStatusAt) || ""}</span>
+                )}
+              </p>
+            </div>
+          )}
+
+          {!hasAwb ? (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                This India order ships via Delhivery. Create the shipment to generate the AWB,
+                then mark the order out for delivery.
+              </p>
+              <button
+                onClick={handleCreateShipment}
+                disabled={creatingShipment}
+                className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Truck className="h-4 w-4" />
+                {creatingShipment ? "Creating shipment…" : "Create Delhivery Shipment"}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">AWB</p>
+                <p className="mt-0.5 font-mono text-sm font-semibold text-slate-900">{order.trackingReference}</p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={handleDownloadLabel}
+                  disabled={loadingLabel}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  {loadingLabel ? "Opening…" : "Download Label"}
+                </button>
+                <button
+                  onClick={handleTrackShipment}
+                  disabled={trackingShipment}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <MapPinned className="h-4 w-4" />
+                  {trackingShipment ? "Tracking…" : "Track"}
+                </button>
+                {!isTerminal && status !== 'DELIVERED' && (
+                  <button
+                    onClick={handleCancelShipment}
+                    disabled={cancellingShipment}
+                    className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-60"
+                  >
+                    <XCircle className="h-4 w-4" />
+                    {cancellingShipment ? "Cancelling…" : "Cancel Shipment"}
+                  </button>
+                )}
+              </div>
+
+              {/* Tracking summary — latest status + a few recent scans */}
+              {trackInfo && (
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  {trackInfo.found === false ? (
+                    <p className="text-sm text-slate-500">No tracking information is available for this AWB yet.</p>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{trackInfo.status || "—"}</p>
+                        {trackInfo.statusDateTime && (
+                          <span className="text-xs text-slate-400">{formatTimelineDate(trackInfo.statusDateTime) || trackInfo.statusDateTime}</span>
+                        )}
+                      </div>
+                      {trackInfo.instructions && (
+                        <p className="mt-0.5 text-xs text-slate-500">{trackInfo.instructions}</p>
+                      )}
+                      {Array.isArray(trackInfo.scans) && trackInfo.scans.length > 0 && (
+                        <ul className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+                          {trackInfo.scans
+                            .slice(-4)
+                            .reverse()
+                            .map((raw: any, i: number) => {
+                              const sc = raw?.ScanDetail || raw || {};
+                              const label = sc.Scan || sc.ScanType || sc.Status || "Scan";
+                              const loc = sc.ScannedLocation || sc.ScanLocation || "";
+                              const when = sc.ScanDateTime || sc.StatusDateTime;
+                              const instr = sc.Instructions || sc.Instruction || "";
+                              return (
+                                <li key={i} className="text-xs text-slate-600">
+                                  <span className="font-medium text-slate-800">{label}</span>
+                                  {loc ? <span className="text-slate-500"> · {loc}</span> : null}
+                                  {when ? <span className="text-slate-400"> · {formatTimelineDate(when) || when}</span> : null}
+                                  {instr ? <span className="block text-slate-400">{instr}</span> : null}
+                                </li>
+                              );
+                            })}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1044,35 +1308,50 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
             </div>
 
             <div className="space-y-4 px-6 pb-2">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Courier Partner <span className="text-orange-600">*</span>
-                </label>
-                <Dropdown
-                  value={shipCourier}
-                  options={courierOptions}
-                  onChange={(v) => setShipCourier(v as string)}
-                  placeholder={courierOptions.length ? "Select a courier partner" : "No couriers configured"}
-                  disabled={submittingShip}
-                />
-                {customerCourierId && shipCourier === customerCourierId && (
-                  <p className="mt-1.5 text-xs text-slate-500">Defaulted to the courier the customer selected — change it if needed.</p>
-                )}
-              </div>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Tracking ID <span className="text-orange-600">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={shipTracking}
-                  onChange={(e) => setShipTracking(e.target.value)}
-                  disabled={submittingShip}
-                  placeholder="Enter the courier tracking ID"
-                  className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 disabled:bg-slate-50"
-                />
-                <p className="mt-1.5 text-xs text-slate-500">The customer is notified with this tracking ID.</p>
-              </div>
+              {liveActive ? (
+                /* Live courier (Delhivery): ships against the already-created AWB —
+                   no manual courier / tracking entry. */
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Delhivery AWB</p>
+                  <p className="mt-0.5 font-mono text-sm font-semibold text-slate-900">{order.trackingReference}</p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    This order ships via Delhivery. Confirming marks it out for delivery using the AWB above —
+                    the customer is notified with this tracking number.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                      Courier Partner <span className="text-orange-600">*</span>
+                    </label>
+                    <Dropdown
+                      value={shipCourier}
+                      options={courierOptions}
+                      onChange={(v) => setShipCourier(v as string)}
+                      placeholder={courierOptions.length ? "Select a courier partner" : "No couriers configured"}
+                      disabled={submittingShip}
+                    />
+                    {customerCourierId && shipCourier === customerCourierId && (
+                      <p className="mt-1.5 text-xs text-slate-500">Defaulted to the courier the customer selected — change it if needed.</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                      Tracking ID <span className="text-orange-600">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={shipTracking}
+                      onChange={(e) => setShipTracking(e.target.value)}
+                      disabled={submittingShip}
+                      placeholder="Enter the courier tracking ID"
+                      className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm outline-none transition-all focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 disabled:bg-slate-50"
+                    />
+                    <p className="mt-1.5 text-xs text-slate-500">The customer is notified with this tracking ID.</p>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="mt-2 flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
@@ -1087,7 +1366,7 @@ export default function HubToCustomerDetail({ orderId }: HubToCustomerDetailProp
               <button
                 type="button"
                 onClick={handleConfirmShip}
-                disabled={submittingShip || !shipCourier || !shipTracking.trim()}
+                disabled={submittingShip || (!liveActive && (!shipCourier || !shipTracking.trim()))}
                 className="inline-flex items-center gap-2 rounded-full bg-orange-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {submittingShip ? "Shipping…" : "Confirm & Ship"}

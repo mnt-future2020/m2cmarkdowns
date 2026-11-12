@@ -158,7 +158,7 @@ class CartService {
   }
 
   /** Set the shipping mode and courier for one cart line. */
-  async setShipping(itemId: string, transportType: 'AIR' | 'SHIP', courier: string): Promise<CartResponse> {
+  async setShipping(itemId: string, transportType: 'AIR' | 'SHIP', courier: string | null): Promise<CartResponse> {
     try {
       // Send the active storefront currency so the server validates the courier
       // against the region the shopper is actually in (and re-aligns a line that

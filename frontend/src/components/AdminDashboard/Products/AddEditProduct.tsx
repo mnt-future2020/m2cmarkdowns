@@ -7,7 +7,8 @@ import { Button } from '@/components/UI/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/UI/Card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/UI/Table'
 import Dropdown from '@/components/UI/Dropdown'
-import { ArrowLeft, Save, X, Upload, Package, Image as ImageIcon, ChevronLeft, ChevronRight, Pencil } from 'lucide-react'
+import { ArrowLeft, Save, X, Upload, Package, Image as ImageIcon, ChevronLeft, ChevronRight, Pencil, AlertCircle } from 'lucide-react'
+import courierIntegrationService from '@/services/courierIntegrationService'
 import VariantImageModal from './VariantImageModal'
 import CareInstructionModal, { CARE_INSTRUCTIONS, CareIcon, CATEGORY_COLORS, CATEGORY_BORDER } from '@/components/VendorDashboard/Products/CareInstructionModal'
 import Link from 'next/link'
@@ -294,6 +295,15 @@ export default function AddEditProduct({ productId, isEdit = false, inventoryId,
   const [couriers, setCouriers] = useState<Courier[]>([])
   useEffect(() => {
     courierService.getActiveCouriers().then(setCouriers).catch(() => setCouriers([]))
+  }, [])
+
+  // Live courier (Delhivery) status — drives the domestic (.in) per-kg rate note.
+  const [liveRatesActive, setLiveRatesActive] = useState(false)
+  useEffect(() => {
+    courierIntegrationService
+      .getSettings()
+      .then((res) => setLiveRatesActive(!!(res?.data?.enabled && res?.data?.connected && res?.data?.useLiveRates)))
+      .catch(() => setLiveRatesActive(false))
   }, [])
 
   const [formData, setFormData] = useState<ProductFormData>({
@@ -3532,6 +3542,7 @@ export default function AddEditProduct({ productId, isEdit = false, inventoryId,
                         title: string, sub: string,
                         days: number | undefined, cost: number | undefined,
                         onDays: (v: number) => void, onCost: (v: number) => void, costPlaceholder: string,
+                        costNote?: React.ReactNode,
                       ) => (
                         <div key={title} className="rounded-lg border border-slate-200 p-3">
                           <p className="text-sm font-semibold text-slate-800">{title} <span className="text-xs font-normal text-slate-400">· {sub}</span></p>
@@ -3547,13 +3558,23 @@ export default function AddEditProduct({ productId, isEdit = false, inventoryId,
                                 className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-transparent" placeholder={costPlaceholder} />
                             </div>
                           </div>
+                          {costNote}
                         </div>
                       );
+                      const surfaceNote = liveRatesActive ? (
+                        <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2">
+                          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                          <p className="text-[11px] leading-snug text-amber-800">
+                            Domestic shipping is priced live by Delhivery — this per-kg rate is used only for international
+                            shipping or when live rates are off. Weight &amp; dimensions are still required.
+                          </p>
+                        </div>
+                      ) : undefined;
                       return (
                         <div className="space-y-3">
                           {lane('Air', 'express', lc.airDeliveryDays, lc.airCostPerKg, (v) => setLC({ airDeliveryDays: v }), (v) => setLC({ airCostPerKg: v }), 'e.g. 100')}
                           {showSea && lane('Sea Freight', 'international · .com', lc.shipDeliveryDays, lc.shipCostPerKg, (v) => setLC({ shipDeliveryDays: v }), (v) => setLC({ shipCostPerKg: v }), 'e.g. 20')}
-                          {showSurface && lane('Surface / Road', 'domestic India · .in', lc.surfaceDeliveryDays, lc.surfaceCostPerKg, (v) => setLC({ surfaceDeliveryDays: v }), (v) => setLC({ surfaceCostPerKg: v }), 'e.g. 40')}
+                          {showSurface && lane('Surface / Road', 'domestic India · .in', lc.surfaceDeliveryDays, lc.surfaceCostPerKg, (v) => setLC({ surfaceDeliveryDays: v }), (v) => setLC({ surfaceCostPerKg: v }), 'e.g. 40', surfaceNote)}
                         </div>
                       );
                     })()}
@@ -3566,6 +3587,7 @@ export default function AddEditProduct({ productId, isEdit = false, inventoryId,
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <p className="text-sm text-slate-600">Define weight ranges to auto-recommend transport type. Weights are in KG (normalized).</p>
+                    <p className="mt-1 text-xs text-slate-500"><strong>Air</strong> applies to all regions. <strong>Sea</strong> applies to international (.com) orders only, and <strong>Surface / Road</strong> to domestic India (.in) only — so each market can have its own weight bands (e.g. Surface 5–15 kg for India, Sea 50–100 kg internationally). Sea &amp; Surface both ship via the “Ship” lane under the hood.</p>
                     <div className="space-y-3">
                       {(formData.logisticsConfig?.weightRanges || []).map((range: { minWeight: number; maxWeight: number; recommendedTransport: string }, idx: number) => (
                         <div key={idx} className="flex items-center gap-3">
@@ -3615,8 +3637,14 @@ export default function AddEditProduct({ productId, isEdit = false, inventoryId,
                                 });
                               }}
                               options={[
-                                { value: 'AIR', label: 'Air' },
-                                { value: 'SHIP', label: 'Ship' },
+                                { value: 'AIR', label: 'Air — all regions' },
+                                { value: 'SEA', label: 'Sea — International (.com)' },
+                                { value: 'SURFACE', label: 'Surface / Road — India (.in)' },
+                                // Keep legacy 'SHIP' visible for ranges saved before the
+                                // Sea/Surface split (applies to both markets).
+                                ...(range.recommendedTransport === 'SHIP'
+                                  ? [{ value: 'SHIP', label: 'Ship (legacy — both)' }]
+                                  : []),
                               ]}
                             />
                           </div>

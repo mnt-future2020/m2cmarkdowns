@@ -110,7 +110,27 @@ exports.updateShippingGst = async (req, res) => {
 // only — order creation recomputes everything authoritatively.
 exports.quoteDelivery = async (req, res) => {
     try {
-        const { country, state, city, weightShippingInr = 0, freeShipping = false } = req.body || {};
+        const { country, state, city, pincode, currency, weightShippingInr = 0, freeShipping = false } = req.body || {};
+
+        // When the live courier (Delhivery) is active for India, IT decides the
+        // delivery area + price — delivery zones are bypassed for India. Shipping GST
+        // still applies (tax requirement); there's no zone flat fee in this mode.
+        const delhivery = require('../utils/delhivery');
+        const integ = await delhivery.getIntegration();
+        const isIndia = String(country || '').trim().toLowerCase() === 'india' || String(currency || '').toUpperCase() === 'INR';
+        if (isIndia && delhivery.isLiveForRegion(integ, 'INR')) {
+            const pin = String(pincode || '').trim();
+            let serviceable = true; // fail open on a transient API error (Delhivery serves most of India)
+            if (/^\d{6}$/.test(pin)) {
+                const s = await delhivery.checkServiceability(pin, integ).catch(() => null);
+                if (s && s.ok) serviceable = !!s.serviceable;
+            }
+            if (!serviceable) return res.json({ success: true, serviceable: false });
+            const shippingGstPct = await getShippingGstPct();
+            const b = combineShipping({ weightShippingInr: toNum(weightShippingInr), zoneFlatFee: 0, shippingGstPct, freeShipping: !!freeShipping });
+            return res.json({ success: true, serviceable: true, zone: { name: 'Delhivery (live courier)', flatFee: 0 }, shippingGstPct, ...b });
+        }
+
         const zone = await resolveDeliveryZone({ country, state, city });
         if (!zone) {
             return res.json({ success: true, serviceable: false });

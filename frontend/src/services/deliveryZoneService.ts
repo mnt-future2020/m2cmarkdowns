@@ -52,7 +52,7 @@ class DeliveryZoneService {
     return res.data;
   }
   // Checkout: serviceability + shipping breakdown (INR). Returns not-serviceable on any error.
-  async quote(body: { country?: string; state?: string; city?: string; weightShippingInr?: number; freeShipping?: boolean }): Promise<DeliveryQuote> {
+  async quote(body: { country?: string; state?: string; city?: string; pincode?: string; currency?: string; weightShippingInr?: number; freeShipping?: boolean }): Promise<DeliveryQuote> {
     try {
       const res = await axios.post('/delivery-zones/quote', body);
       return res.data;

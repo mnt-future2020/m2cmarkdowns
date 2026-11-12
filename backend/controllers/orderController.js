@@ -204,7 +204,20 @@ const createOrder = async (req, res) => {
         // (the per-kg rates are entered in rupees). Converted to the order currency
         // once the goods subtotal is known.
         let computedShippingInr = 0;
+        let computedWeightKg = 0; // total shipment weight, for live courier rate quotes
         const orderItemsData = [];
+
+        // When the live courier (Delhivery) handles India dispatch, the storefront no
+        // longer asks the customer to pick a per-line courier — so don't require one
+        // for INR orders. (International .com orders still require a manual courier.)
+        let liveCourierIN = false;
+        try {
+            if (currency === 'INR') {
+                const delhivery = require('../utils/delhivery');
+                const integ = await delhivery.getIntegration();
+                liveCourierIN = delhivery.isLiveForRegion(integ, currency);
+            }
+        } catch { liveCourierIN = false; }
         const stockUpdates = [];
         const vendorTotals = {}; // Tracks vendor amounts using their base prices
 
@@ -413,7 +426,7 @@ const createOrder = async (req, res) => {
             // region comes from the order currency (INR=.in, USD=.com). Frozen onto the
             // line so fulfilment/admin dispatches with the carrier the customer chose.
             let lineCourier = null;
-            if (allowedTransports.length > 0) {
+            if (allowedTransports.length > 0 && !liveCourierIN) {
                 if (!item.courier) {
                     return res.status(400).json({
                         success: false,
@@ -427,6 +440,10 @@ const createOrder = async (req, res) => {
                     });
                 }
                 lineCourier = item.courier;
+            } else if (allowedTransports.length > 0 && item.courier) {
+                // Live-courier IN order: a courier isn't required, but honour one if the
+                // client still sent a valid one (keeps the snapshot meaningful).
+                if (await isCourierAvailable(item.courier, currency, lineTransport)) lineCourier = item.courier;
             }
 
             // Region drives the SHIP lane's cost (SURFACE domestic vs SEA international).
@@ -436,6 +453,7 @@ const createOrder = async (req, res) => {
                 product.logisticsConfig, item.quantity, lineTransport || undefined, lineRegion
             );
             computedShippingInr += lineLogistics.totalShippingCost;
+            computedWeightKg += Number(lineLogistics.totalWeightKg) || 0;
 
             // Full logistics snapshot — everything the customer selected/was quoted for
             // this line, so the admin order view shows the complete shipping picture.
@@ -663,14 +681,59 @@ const createOrder = async (req, res) => {
             state: shippingAddress?.state,
             city: shippingAddress?.city,
         });
-        if (!deliveryZone) {
+        // When the live courier (Delhivery) is active for India, IT decides the
+        // delivery area — zones are bypassed for India. Block only if Delhivery
+        // explicitly reports the pincode as not serviceable (fail open on an API
+        // error so a transient hiccup never blocks a legit order).
+        if (liveCourierIN) {
+            const pin = String(shippingAddress?.pincode || shippingAddress?.zip || '').trim();
+            if (/^\d{6}$/.test(pin)) {
+                try {
+                    const delhivery = require('../utils/delhivery');
+                    const s = await delhivery.checkServiceability(pin);
+                    if (s && s.ok && s.serviceable === false) {
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Delivery is not available to this location. Please choose a different delivery address.',
+                        });
+                    }
+                } catch { /* fail open */ }
+            }
+        } else if (!deliveryZone) {
             return res.status(400).json({
                 success: false,
                 error: 'Delivery is not available to this location. Please choose a different delivery address.',
             });
         }
+        // Live courier rate (Delhivery): when live rates are enabled for an IN order
+        // to a serviceable pincode, the carrier's quote REPLACES the weight-based
+        // rate. Any failure falls back to the static rate so checkout never breaks.
+        // NOTE: the checkout must price shipping from the same quote endpoint, or the
+        // Razorpay reconciliation below will reject the mismatch.
+        if (currency === 'INR' && !freeShipping) {
+            try {
+                const delhivery = require('../utils/delhivery');
+                const integ = await delhivery.getIntegration();
+                if (integ.useLiveRates && delhivery.isLiveForRegion(integ, currency) && integ.originPincode) {
+                    const destPin = String(shippingAddress?.pincode || shippingAddress?.zip || '');
+                    const weightGrams = Math.max(1, Math.round((computedWeightKg || 0) * 1000)) || integ.defaultWeightGrams;
+                    if (/^\d{6}$/.test(destPin)) {
+                        const q = await delhivery.rateQuote({
+                            originPin: integ.originPincode,
+                            destPin,
+                            weightGrams,
+                            paymentType: paymentMethod === 'COD' ? 'COD' : 'Pre-paid',
+                        });
+                        if (q.ok && q.amount > 0) computedShippingInr = round2(q.amount);
+                    }
+                }
+            } catch { /* keep the static weight-based rate */ }
+        }
+
         const shippingGstPct = await getShippingGstPct();
-        const zoneFeeInr = freeShipping ? 0 : (Number(deliveryZone.flatFee) || 0);
+        // No zone flat fee in India-live mode (zones bypassed) or when the zone is
+        // absent; otherwise use the matched zone's fee. Waived entirely on free shipping.
+        const zoneFeeInr = (freeShipping || liveCourierIN || !deliveryZone) ? 0 : (Number(deliveryZone.flatFee) || 0);
         // Shipping base (INR) = weight-based rate + zone flat fee (0 when free).
         const shippingBaseInr = freeShipping ? 0 : round2(computedShippingInr + zoneFeeInr);
         const shippingTaxInr = round2(shippingBaseInr * shippingGstPct / 100);
@@ -895,9 +958,10 @@ const createOrder = async (req, res) => {
                     // reconciles against totalAmount.
                     subtotal: roundedSubtotal,
                     shippingCost: roundedShipping,
-                    // Delivery zone + shipping tax (destination-based).
-                    deliveryZoneId: deliveryZone.id,
-                    deliveryZoneName: deliveryZone.name,
+                    // Delivery zone + shipping tax (destination-based). In India-live
+                    // mode there's no zone — Delhivery handles the area/price.
+                    deliveryZoneId: deliveryZone?.id ?? null,
+                    deliveryZoneName: deliveryZone?.name ?? (liveCourierIN ? 'Delhivery (live courier)' : null),
                     deliveryFlatFee: deliveryFlatFeeOrderCcy,
                     shippingTax: roundedShippingTax,
                     shippingTaxINR: shippingTaxInr,
@@ -1678,6 +1742,17 @@ const validateCheckout = async (req, res) => {
         const userId = req.userId;
         const currency = req.body?.currency === 'USD' ? 'USD' : 'INR';
 
+        // When the live courier (Delhivery) handles India dispatch, the customer no
+        // longer picks a per-line courier — so don't require one for INR orders.
+        let liveCourierIN = false;
+        try {
+            if (currency === 'INR') {
+                const delhivery = require('../utils/delhivery');
+                const integ = await delhivery.getIntegration();
+                liveCourierIN = delhivery.isLiveForRegion(integ, currency);
+            }
+        } catch { liveCourierIN = false; }
+
         const cart = await prisma.cart.findFirst({ where: { userId }, include: { items: true } });
         if (!cart || cart.items.length === 0) {
             return res.status(400).json({ success: false, error: 'Your cart is empty.' });
@@ -1718,7 +1793,7 @@ const validateCheckout = async (req, res) => {
                 return res.status(400).json({ success: false, error: `The selected shipping method is not available for "${product.name}".` });
             }
             const lineTransport = item.transportType || allowedTransports[0] || null;
-            if (allowedTransports.length > 0) {
+            if (allowedTransports.length > 0 && !liveCourierIN) {
                 if (!item.courier) {
                     return res.status(400).json({ success: false, error: `Please choose a courier partner for "${product.name}" before placing the order.` });
                 }

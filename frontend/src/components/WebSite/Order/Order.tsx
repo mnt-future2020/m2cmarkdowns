@@ -36,7 +36,7 @@ import Reveal from "@/components/WebSite/Shared/Reveal"
 import orderService, { Order as APIOrder } from "@/services/orderService"
 import productService from "@/services/productService"
 import { courierService } from "@/services/courierService"
-import { courierName, courierTrackingUrl } from "@/lib/couriers"
+import { courierName, courierTrackingUrl, courierDisplayName, orderTrackingUrl } from "@/lib/couriers"
 import { showSuccessToast, showErrorToast } from "@/lib/toast-utils"
 import ReviewModal from "./ReviewModal"
 import ReturnRequestModal from "./ReturnRequestModal"
@@ -303,6 +303,7 @@ export default function OrderList() {
           })),
           trackingNumber: apiOrder.trackingReference,
           courier: apiOrder.courier,
+          shippingProvider: (apiOrder as any).shippingProvider ?? null,
           estimatedDelivery: apiOrder.estimatedDelivery,
           rawStatus: apiOrder.status,
           returnRequest: (apiOrder as any).returnRequest ?? null,
@@ -1293,7 +1294,7 @@ export default function OrderList() {
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                 <p className="text-xs uppercase tracking-wide text-slate-500">Courier Partner</p>
                 <p className="mt-1 text-base font-semibold text-slate-900">
-                  {trackOrder.courier ? courierName(trackOrder.courier) : 'Courier'}
+                  {courierDisplayName({ shippingProvider: (trackOrder as any).shippingProvider, courier: trackOrder.courier }) || 'Courier'}
                 </p>
               </div>
 
@@ -1311,7 +1312,9 @@ export default function OrderList() {
               </div>
 
               {(() => {
-                const url = courierTrackingUrl(trackOrder.courier, trackOrder.trackingNumber);
+                const provider = (trackOrder as any).shippingProvider;
+                const url = orderTrackingUrl({ shippingProvider: provider, courier: trackOrder.courier, trackingReference: trackOrder.trackingNumber });
+                const name = courierDisplayName({ shippingProvider: provider, courier: trackOrder.courier });
                 return url ? (
                   <a
                     href={url}
@@ -1319,12 +1322,12 @@ export default function OrderList() {
                     rel="noopener noreferrer"
                     className="flex w-full items-center justify-center gap-2 rounded-full bg-[#e01a1b] px-6 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#c41617]"
                   >
-                    Track on {trackOrder.courier ? courierName(trackOrder.courier) : 'courier'} website
+                    Track on {name || 'courier'} website
                     <ExternalLink className="h-4 w-4" />
                   </a>
                 ) : (
                   <p className="text-center text-xs text-slate-500">
-                    Use the tracking ID on {trackOrder.courier ? courierName(trackOrder.courier) : 'the courier'}&apos;s website to see live status.
+                    Use the tracking ID on {name || 'the courier'}&apos;s website to see live status.
                   </p>
                 );
               })()}

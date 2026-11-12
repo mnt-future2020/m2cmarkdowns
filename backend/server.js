@@ -316,6 +316,7 @@ app.use("/api/contact-enquiries", contactEnquiryRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/offers", offerRoutes);
 app.use("/api/couriers", courierRoutes);
+app.use("/api/courier-integration", require("./routes/courierIntegrationRoutes"));
 app.use("/api/delivery-zones", deliveryZoneRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/qc-checkers", qcCheckerRoutes);

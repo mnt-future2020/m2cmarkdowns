@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Country, State, City } from 'country-state-city';
 import { Card, CardContent } from '@/components/UI/Card';
 import { Button } from '@/components/UI/Button';
-import { MapPin, Plus, Pencil, Trash2, X, Search, Truck, Percent, Save } from 'lucide-react';
+import { MapPin, Plus, Pencil, Trash2, X, Search, Truck, Percent, Save, ChevronDown, Check, AlertCircle } from 'lucide-react';
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils';
 import DeleteConfirmModal from '@/components/UI/DeleteConfirmModal';
 import { deliveryZoneService, type DeliveryZone, type ZoneState, type ZonePayload } from '@/services/deliveryZoneService';
+import courierIntegrationService from '@/services/courierIntegrationService';
 import { hasPermission } from '@/lib/auth';
 
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
@@ -23,6 +24,14 @@ export default function DeliveryZones() {
   const canEdit = hasPermission('all_products:edit');
   const canDelete = hasPermission('all_products:delete');
   const canCreate = hasPermission('all_products:create');
+  const [liveActive, setLiveActive] = useState(false);
+
+  useEffect(() => {
+    courierIntegrationService
+      .getSettings()
+      .then((res) => setLiveActive(!!(res?.data?.enabled && res?.data?.connected)))
+      .catch(() => setLiveActive(false));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +83,17 @@ export default function DeliveryZones() {
         </div>
         {canCreate && <Button onClick={() => setModal({ mode: 'create' })}><Plus className="mr-1.5 h-4 w-4" /> Add Zone</Button>}
       </div>
+
+      {liveActive && (
+        <div className="mb-5 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <p className="text-xs text-amber-800">
+            Live courier (Delhivery) sets the domestic carrier and (if live rates are on) the domestic shipping rate.
+            Delivery zones still control destination availability, the flat delivery fee, and shipping tax — keep them
+            configured.
+          </p>
+        </div>
+      )}
 
       {/* Shipping GST */}
       <Card className="mb-5">
@@ -140,6 +160,23 @@ function ZoneModal({ mode, zone, zones, onClose, onSaved }: { mode: 'create' | '
   const [citySearch, setCitySearch] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Custom country picker — replaces the native <select>, whose browser-rendered
+  // list of ~250 countries overflowed the viewport. Contained, searchable panel.
+  const [countryOpen, setCountryOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
+  const countryRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!countryOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (countryRef.current && !countryRef.current.contains(e.target as Node)) setCountryOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setCountryOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [countryOpen]);
+
   // What other zones already cover — so we never create an overlapping zone.
   // Fully-covered countries/states and already-taken city names get disabled.
   const n = (s: string) => String(s || '').trim().toLowerCase();
@@ -171,6 +208,20 @@ function ZoneModal({ mode, zone, zones, onClose, onSaved }: { mode: 'create' | '
   const countryHasAny = coverage.anyCoverage.has(ciU);
 
   const countries = useMemo(() => Country.getAllCountries(), []);
+  const selectedCountry = useMemo(() => countries.find((c) => c.isoCode === countryIso), [countries, countryIso]);
+  const filteredCountries = useMemo(() => {
+    const q = countrySearch.trim().toLowerCase();
+    return q ? countries.filter((c) => c.name.toLowerCase().includes(q)) : countries;
+  }, [countries, countrySearch]);
+  const selectCountry = (iso: string) => {
+    setCountryIso(iso);
+    setSelStates([]);
+    setSelCities([]);
+    setAllStates(false);
+    setAllCities(true);
+    setCountryOpen(false);
+    setCountrySearch('');
+  };
   const states = useMemo(() => State.getStatesOfCountry(countryIso) || [], [countryIso]);
   const cities = useMemo(() => {
     if (allStates) return [] as string[];
@@ -238,12 +289,47 @@ function ZoneModal({ mode, zone, zones, onClose, onSaved }: { mode: 'create' | '
             </div>
             <div>
               <label className="mb-1 block text-[13px] font-semibold text-slate-700">Country</label>
-              <select value={countryIso} onChange={(e) => { setCountryIso(e.target.value); setSelStates([]); setSelCities([]); setAllStates(false); setAllCities(true); }} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#e01a1b] focus:ring-2 focus:ring-[#e01a1b]/15">
-                {countries.map((c) => {
-                  const done = coverage.fullCountries.has(c.isoCode.toUpperCase());
-                  return <option key={c.isoCode} value={c.isoCode} disabled={done}>{c.flag} {c.name}{done ? ' — fully covered' : ''}</option>;
-                })}
-              </select>
+              <div className="relative" ref={countryRef}>
+                <button
+                  type="button"
+                  onClick={() => setCountryOpen((o) => !o)}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm outline-none focus:border-[#e01a1b] focus:ring-2 focus:ring-[#e01a1b]/15"
+                >
+                  <span className="truncate">{selectedCountry ? `${selectedCountry.flag} ${selectedCountry.name}` : 'Select a country'}</span>
+                  <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${countryOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {countryOpen && (
+                  <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                    <div className="relative border-b border-slate-100 p-2">
+                      <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      <input autoFocus value={countrySearch} onChange={(e) => setCountrySearch(e.target.value)} placeholder="Search countries…" className="w-full rounded-md border border-slate-200 py-1.5 pl-8 pr-2 text-sm outline-none" />
+                    </div>
+                    <div className="max-h-56 overflow-y-auto p-1">
+                      {filteredCountries.length === 0 ? (
+                        <p className="py-3 text-center text-xs text-slate-400">No countries</p>
+                      ) : (
+                        filteredCountries.map((c) => {
+                          const done = coverage.fullCountries.has(c.isoCode.toUpperCase());
+                          const selected = c.isoCode === countryIso;
+                          return (
+                            <button
+                              key={c.isoCode}
+                              type="button"
+                              disabled={done}
+                              onClick={() => selectCountry(c.isoCode)}
+                              title={done ? 'Fully covered by another zone' : undefined}
+                              className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] ${done ? 'cursor-not-allowed text-slate-300' : selected ? 'bg-[#e01a1b]/10 text-[#e01a1b]' : 'text-slate-700 hover:bg-slate-50'}`}
+                            >
+                              <span className="truncate">{c.flag} {c.name}{done ? ' — fully covered' : ''}</span>
+                              {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

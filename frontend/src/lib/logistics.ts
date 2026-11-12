@@ -6,7 +6,9 @@ export interface LogisticsConfig {
   maxWeight: number;
   dimensions: { length: number; width: number; height: number; unit: 'CM' | 'IN' } | null;
   transportTypes: ('AIR' | 'SHIP')[];
-  weightRanges: Array<{ minWeight: number; maxWeight: number; recommendedTransport: 'AIR' | 'SHIP' }>;
+  // recommendedTransport: AIR (both markets) | SEA (.com only) | SURFACE (.in only)
+  // | SHIP (legacy, both). SEA/SURFACE/SHIP all resolve to the SHIP transport type.
+  weightRanges: Array<{ minWeight: number; maxWeight: number; recommendedTransport: 'AIR' | 'SHIP' | 'SEA' | 'SURFACE' }>;
   airDeliveryDays: number;
   // The SHIP lane means different things per market: SEA freight internationally (.com)
   // vs SURFACE / road domestically (.in). shipDeliveryDays / shipCostPerKg hold the SEA
@@ -38,8 +40,10 @@ function shipLane(config: LogisticsConfig, region: ShipRegion): { days: number; 
 export interface LogisticsCalculation {
   unitWeightKg: number;
   totalWeightKg: number;
-  recommendedTransport: 'AIR' | 'SHIP';
-  selectedTransport: 'AIR' | 'SHIP';
+  // null when the order weight falls outside every configured range for this market
+  // (no fallback) — the shopper then picks the shipping method themselves.
+  recommendedTransport: 'AIR' | 'SHIP' | null;
+  selectedTransport: 'AIR' | 'SHIP' | null;
   deliveryDays: number;
   shippingCostPerKg: number;
   totalShippingCost: number;
@@ -66,32 +70,51 @@ export function calculateLogistics(
   const maxWeightKg = toKg(config.maxWeight, config.weightUom);
   const exceedsMaxWeight = maxWeightKg > 0 && totalWeightKg > maxWeightKg;
 
-  // Find recommended transport from weight ranges
-  let recommendedTransport: 'AIR' | 'SHIP' = config.transportTypes[0] || 'SHIP';
+  // Find recommended transport from weight ranges, region-aware. A range's
+  // transport maps to the real AIR/SHIP mode, or null when it doesn't apply to this
+  // market — so .in (Surface) and .com (Sea) can carry their own crossover weights.
+  const isDomesticMkt = region === 'IN';
+  const rangeModeForRegion = (t: string): 'AIR' | 'SHIP' | null => {
+    const v = String(t || '').toUpperCase();
+    if (v === 'AIR') return 'AIR';
+    if (v === 'SURFACE') return isDomesticMkt ? 'SHIP' : null;
+    if (v === 'SEA') return isDomesticMkt ? null : 'SHIP';
+    if (v === 'SHIP') return 'SHIP';
+    return null;
+  };
+  // No fallback: recommend a mode ONLY when the weight matches a range for this market.
+  let recommendedTransport: 'AIR' | 'SHIP' | null = null;
   for (const range of config.weightRanges) {
+    const mode = rangeModeForRegion(range.recommendedTransport);
+    if (mode == null) continue;
     if (totalWeightKg >= range.minWeight && totalWeightKg <= range.maxWeight) {
-      recommendedTransport = range.recommendedTransport;
+      recommendedTransport = mode;
       break;
     }
   }
 
-  // If only one transport type is available, force it
+  // If only one transport type is available, it's the only option (not a fallback).
   if (config.transportTypes.length === 1) {
     recommendedTransport = config.transportTypes[0];
   }
 
-  const selectedTransport = overrideTransport && config.transportTypes.includes(overrideTransport)
+  const selectedTransport: 'AIR' | 'SHIP' | null = overrideTransport && config.transportTypes.includes(overrideTransport)
     ? overrideTransport
     : recommendedTransport;
 
   const ship = shipLane(config, region);
+  // No mode chosen yet → no quote (0 days / 0 cost) until the shopper selects one.
   const deliveryDays = selectedTransport === 'AIR'
     ? config.airDeliveryDays
-    : ship.days;
+    : selectedTransport === 'SHIP'
+      ? ship.days
+      : 0;
 
   const shippingCostPerKg = selectedTransport === 'AIR'
     ? config.airCostPerKg
-    : ship.costPerKg;
+    : selectedTransport === 'SHIP'
+      ? ship.costPerKg
+      : 0;
 
   const totalShippingCost = Math.round(totalWeightKg * shippingCostPerKg * 100) / 100;
 

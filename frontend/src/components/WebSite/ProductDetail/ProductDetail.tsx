@@ -23,6 +23,7 @@ import { formatPrice, getRegionalPrice, getRegionalOriginalPrice, isVisibleInReg
 import { transportModeLabel, isSurfaceRegion, type Courier } from '@/lib/couriers';
 import { FaceIcon, FACE_LABELS, positiveFace, lovedPercent, type FaceValue } from '@/components/WebSite/Shared/FaceRating';
 import { courierService } from '@/services/courierService';
+import courierIntegrationService from '@/services/courierIntegrationService';
 import { applyOfferToPrice, offerEndsLabel, type ActiveOffer, type PublicOffer } from '@/lib/offers';
 import { offerService } from '@/services/offerService';
 import { couponService, type PopupCoupon } from '@/services/couponService';
@@ -716,6 +717,19 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
     courierService.getActiveCouriers(getRegion()).then(setAllCouriers).catch(() => setAllCouriers([]));
   }, []);
 
+  // When the live courier integration (Delhivery) is active for India, it decides the
+  // carrier, so the shopper does NOT pick a courier for India (INR) orders. Fetch the
+  // public flag once; treat any failure as "not live" so the manual picker stays as before.
+  const [liveCourierActiveIN, setLiveCourierActiveIN] = useState(false);
+  useEffect(() => {
+    courierIntegrationService.getPublicStatus()
+      .then((res) => setLiveCourierActiveIN(!!res?.data?.liveActiveIN))
+      .catch(() => setLiveCourierActiveIN(false));
+  }, []);
+  // Hide the manual courier picker only for India when the integration is live;
+  // international (.com / USD) always keeps the manual picker.
+  const courierPickerHidden = liveCourierActiveIN && getRegion() === 'IN';
+
   // Courier partners available for this shopper's region + chosen transport mode. When
   // the product has selected specific couriers (logisticsConfig.courierIds), restrict to
   // those; otherwise (legacy products) show all region+mode couriers. AIR vs SHIP narrows.
@@ -723,6 +737,7 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
     if (!logisticsResult) return [];
     const region = getRegion();
     const mode = logisticsResult.selectedTransport;
+    if (!mode) return []; // no shipping method chosen yet → no couriers to show
     const picked = (product?.logisticsConfig as { courierIds?: string[] } | undefined)?.courierIds;
     return allCouriers.filter((c) =>
       c.region === region &&
@@ -907,7 +922,8 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
     }
 
     // A shipping product must have a courier chosen — it travels with the order.
-    if (product.logisticsConfig && logisticsResult && !selectedCourier) {
+    // Skipped when the live India courier integration picks the carrier for us.
+    if (product.logisticsConfig && logisticsResult && !selectedCourier && !courierPickerHidden) {
       showErrorToast('Courier required', 'Please choose a courier partner before adding to cart.');
       shippingCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       setHighlightShipping(true);
@@ -943,7 +959,11 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
   // Persist the chosen method to the originating cart line, then go back to the cart.
   const handleSaveShippingAndReturn = async () => {
     if (!returnCartItemId || !logisticsResult) return;
-    if (!selectedCourier) {
+    if (!logisticsResult.selectedTransport) {
+      showErrorToast('Shipping method required', 'Please choose a shipping method before continuing.');
+      return;
+    }
+    if (!selectedCourier && !courierPickerHidden) {
       showErrorToast('Courier required', 'Please choose a courier partner before continuing.');
       return;
     }
@@ -1006,7 +1026,8 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
     }
 
     // A shipping product must have a courier chosen — it travels with the order.
-    if (product.logisticsConfig && logisticsResult && !selectedCourier) {
+    // Skipped when the live India courier integration picks the carrier for us.
+    if (product.logisticsConfig && logisticsResult && !selectedCourier && !courierPickerHidden) {
       showErrorToast('Courier required', 'Please choose a courier partner before checking out.');
       shippingCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       setHighlightShipping(true);
@@ -1113,7 +1134,7 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
   const baseHasStock = (product.inventory?.baseStock ?? product.totalStock ?? 0) > 0;
   const nothingBuyable = product.hasVariants && visibleVariants.length === 0 && !baseHasStock;
   // A shipping product needs a courier before it can be added — see the shipping card.
-  const courierMissing = !!(product.logisticsConfig && logisticsResult) && !selectedCourier;
+  const courierMissing = !courierPickerHidden && !!(product.logisticsConfig && logisticsResult) && !selectedCourier;
 
   // Get current price based on region + selected variant
   const currentPrice = selectedVariant
@@ -1849,8 +1870,9 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                           </span>
                         </div>
 
-                        {/* Transport Toggle */}
-                        {(product.logisticsConfig as LogisticsConfig).transportTypes.length > 1 && (
+                        {/* Transport Toggle — hidden for India live courier: Delhivery
+                            picks the service, so the shopper doesn't choose Air/Surface. */}
+                        {!courierPickerHidden && (product.logisticsConfig as LogisticsConfig).transportTypes.length > 1 && (
                           <div className="flex gap-2">
                             {(product.logisticsConfig as LogisticsConfig).transportTypes.map((type) => {
                               const isSelected = logisticsResult.selectedTransport === type;
@@ -1878,18 +1900,24 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                           </div>
                         )}
 
-                        {/* Single transport display */}
-                        {(product.logisticsConfig as LogisticsConfig).transportTypes.length === 1 && (
+                        {/* Single transport display — also hidden for India live courier. */}
+                        {!courierPickerHidden && (product.logisticsConfig as LogisticsConfig).transportTypes.length === 1 && (() => {
+                          // Single-transport products always have a resolved mode.
+                          const only = logisticsResult.selectedTransport ?? (product.logisticsConfig as LogisticsConfig).transportTypes[0]
+                          return (
                           <div className="flex items-center gap-2 py-2 px-3 rounded-lg bg-[#fff1f1] border border-[#ffc1c1] text-sm font-semibold text-[#c41617]">
-                            {logisticsResult.selectedTransport === 'AIR' ? <Plane className="w-4 h-4" /> : isSurfaceRegion(getRegion()) ? <Truck className="w-4 h-4" /> : <Ship className="w-4 h-4" />}
-                            {transportModeLabel(logisticsResult.selectedTransport, getRegion())}
+                            {only === 'AIR' ? <Plane className="w-4 h-4" /> : isSurfaceRegion(getRegion()) ? <Truck className="w-4 h-4" /> : <Ship className="w-4 h-4" />}
+                            {transportModeLabel(only, getRegion())}
                           </div>
-                        )}
+                          )
+                        })()}
 
                         {/* Courier partner — region- and mode-specific. Required
                             before checkout: the chosen carrier travels with the
-                            order to fulfilment/admin. */}
-                        {courierOptions.length > 0 && (
+                            order to fulfilment/admin. When the live India courier
+                            integration is active, Delhivery picks the carrier, so the
+                            manual picker is replaced with a neutral note. */}
+                        {!courierPickerHidden && courierOptions.length > 0 && (
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
@@ -1933,7 +1961,22 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                           </div>
                         )}
 
-                        {/* Delivery & Cost */}
+                        {/* No courier available for this region + shipping method — tell the
+                            shopper instead of showing a silent empty picker they can't act on. */}
+                        {!courierPickerHidden && courierOptions.length === 0 && (
+                          <div className="flex items-start gap-2 py-2 px-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                            <Truck className="w-4 h-4 mt-0.5 shrink-0" />
+                            <span>
+                              No courier partner is available for this shipping method in your region.
+                              Try the other shipping method{getRegion() === 'IN' ? '' : ', or contact us'} — or the admin can add one under Courier Partners.
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Delivery & Cost — hidden for India live courier: the exact
+                            rate and ETA come from Delhivery at checkout once the
+                            delivery pincode is known (the neutral note above covers it). */}
+                        {!courierPickerHidden && (
                         <div className="grid grid-cols-2 gap-3">
                           <div className="rounded-lg bg-[#faf7f3] p-2.5 text-center">
                             <div className="text-xs text-gray-500 mb-0.5">Delivery Time</div>
@@ -1948,6 +1991,7 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                             </div>
                           </div>
                         </div>
+                        )}
 
                         {/* Dimensions */}
                         {(product.logisticsConfig as LogisticsConfig).dimensions && (
@@ -2011,15 +2055,15 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                         {returnCartItemId && (
                           <button
                             onClick={handleSaveShippingAndReturn}
-                            disabled={savingShipping || !selectedCourier}
+                            disabled={savingShipping || (!selectedCourier && !courierPickerHidden)}
                             className="w-full mt-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#e01a1b] text-white text-sm font-semibold hover:bg-[#c41617] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                           >
                             <Check className="w-4 h-4" />
                             {savingShipping
                               ? 'Saving…'
-                              : !selectedCourier
+                              : (!selectedCourier && !courierPickerHidden)
                                 ? 'Select a courier to continue'
-                                : `Use ${logisticsResult.selectedTransport === 'AIR' ? 'Air' : 'Sea'} & return to cart`}
+                                : `Use ${logisticsResult.selectedTransport === 'AIR' ? 'Air' : isSurfaceRegion(getRegion()) ? 'Surface' : 'Sea'} & return to cart`}
                           </button>
                         )}
                       </div>
@@ -2036,7 +2080,9 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                     const subtotal = unit * (quantity || 0);
                     const shipINR = logisticsResult ? logisticsResult.totalShippingCost : null;
                     const shipDisplay = shipINR == null ? null : (getCurrency() === 'USD' ? convertINRtoUSD(shipINR) : shipINR);
-                    const total = subtotal + (shipDisplay || 0);
+                    // India live courier: the real shipping cost needs the delivery
+                    // pincode, so it's resolved at checkout and left out of this total.
+                    const total = courierPickerHidden ? subtotal : subtotal + (shipDisplay || 0);
                     return (
                       <div className="mt-4 space-y-2 border-t border-gray-100 pt-4 text-sm">
                         <div className="flex items-center justify-between text-gray-600">
@@ -2046,7 +2092,7 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                         <div className="flex items-center justify-between text-gray-600">
                           <span className="flex items-center gap-1.5">
                             Shipping
-                            {logisticsResult && (
+                            {!courierPickerHidden && logisticsResult && (
                               <span className="inline-flex items-center gap-1 text-[10px] text-gray-400">
                                 {logisticsResult.selectedTransport === 'AIR' ? <Plane className="w-3 h-3" /> : isSurfaceRegion(getRegion()) ? <Truck className="w-3 h-3" /> : <Ship className="w-3 h-3" />}
                                 {logisticsResult.selectedTransport === 'AIR' ? 'Air' : isSurfaceRegion(getRegion()) ? 'Road' : 'Sea'}
@@ -2054,10 +2100,12 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                             )}
                           </span>
                           <span className="font-semibold tabular-nums text-gray-900">
-                            {shipDisplay == null ? '—' : shipDisplay === 0 ? 'FREE' : formatPrice(shipDisplay)}
+                            {courierPickerHidden
+                              ? <span className="text-xs font-medium text-gray-500">Calculated at checkout</span>
+                              : shipDisplay == null ? '—' : shipDisplay === 0 ? 'FREE' : formatPrice(shipDisplay)}
                           </span>
                         </div>
-                        {logisticsResult && (
+                        {!courierPickerHidden && logisticsResult && (
                           <div className="flex items-center justify-between text-gray-600">
                             <span>Delivery</span>
                             <span className="font-semibold text-gray-900">{logisticsResult.deliveryDays} days</span>
@@ -2378,7 +2426,12 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                         below. */}
                     <div className="flex flex-1 flex-col justify-center">
                     {logisticsResult ? (() => {
-                      const cost = logisticsResult.totalShippingCost === 0
+                      // India live courier: carrier, rate and ETA are decided by
+                      // Delhivery at checkout, so this journey stays neutral instead
+                      // of quoting a specific mode/cost/day count.
+                      const cost = courierPickerHidden
+                        ? 'Calculated at checkout'
+                        : logisticsResult.totalShippingCost === 0
                         ? 'Free shipping'
                         : `${formatPrice(getCurrency() === 'USD' ? convertINRtoUSD(logisticsResult.totalShippingCost) : logisticsResult.totalShippingCost)} shipping`;
                       const days = product.dispatchTimeline?.processingDays;
@@ -2390,16 +2443,16 @@ const ProductDetail = ({ productSlug }: ProductDetailProps) => {
                           detail: days ? `${days} day${days === 1 ? '' : 's'} to dispatch` : 'Prepared for despatch',
                         },
                         {
-                          icon: isSurfaceRegion() ? Truck : Plane,
-                          pill: transportModeLabel(logisticsResult.selectedTransport, getRegion()),
+                          icon: courierPickerHidden ? Truck : isSurfaceRegion() ? Truck : Plane,
+                          pill: courierPickerHidden ? 'Courier partner' : logisticsResult.selectedTransport ? transportModeLabel(logisticsResult.selectedTransport, getRegion()) : 'Shipping',
                           title: 'On its way',
                           detail: cost,
                         },
                         {
                           icon: Home,
-                          pill: `Within ${logisticsResult.deliveryDays} days`,
+                          pill: courierPickerHidden ? 'At your door' : `Within ${logisticsResult.deliveryDays} days`,
                           title: 'At your door',
-                          detail: `${logisticsResult.deliveryDays} day estimate`,
+                          detail: courierPickerHidden ? 'Calculated at checkout' : `${logisticsResult.deliveryDays} day estimate`,
                         },
                       ];
                       return (

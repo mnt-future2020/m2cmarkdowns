@@ -18,8 +18,9 @@ import { companyInfoService } from "@/services/companyInfoService"
 import addressService from "@/services/addressService"
 import { applyOfferToPrice, type ActiveOffer } from "@/lib/offers"
 import { calculateLogistics, type LogisticsConfig } from "@/lib/logistics"
-import { courierName } from "@/lib/couriers"
+import { courierName, transportModeLabel } from "@/lib/couriers"
 import { courierService } from "@/services/courierService"
+import courierIntegrationService from "@/services/courierIntegrationService"
 import Reveal from "@/components/WebSite/Shared/Reveal"
 import OfferCelebration from "@/components/WebSite/Shared/OfferCelebration"
 import ProductCard from "@/components/WebSite/ProductCard/ProductCard"
@@ -392,6 +393,17 @@ export default function Order() {
   useEffect(() => {
     courierService.getActiveCouriers().then(() => setCourierTick((t) => t + 1)).catch(() => {})
   }, [])
+
+  // When the live courier integration (Delhivery) is active for India, it decides the
+  // carrier, so India (INR) lines don't need a manually-chosen courier to check out.
+  // International stays unchanged. Any failure is treated as "not live".
+  const [liveCourierActiveIN, setLiveCourierActiveIN] = useState(false)
+  useEffect(() => {
+    courierIntegrationService.getPublicStatus()
+      .then((res) => setLiveCourierActiveIN(!!res?.data?.liveActiveIN))
+      .catch(() => setLiveCourierActiveIN(false))
+  }, [])
+  const courierPickerHidden = liveCourierActiveIN && getRegion() === 'IN'
 
   // Empty-cart discovery rails.
   const [suggested, setSuggested] = useState<PublicProduct[]>([])
@@ -935,6 +947,7 @@ export default function Order() {
     const opts = transportOptionsFor(item)
     if (opts.length === 0) return false // no logistics — nothing to choose
     if (opts.length > 1 && !item.transportType) return true // must pick a mode
+    if (courierPickerHidden) return false // live India integration assigns the carrier
     return !item.courier // shipping products must have a courier
   }
 
@@ -1107,7 +1120,10 @@ export default function Order() {
         }
       }
     }
-    const shipping = freeShippingApplied
+    // India live courier: the real shipping cost needs the delivery pincode and is
+    // quoted by Delhivery at checkout, so the weight-based estimate is left out of
+    // the cart total (the Delivery charges line shows "Calculated at checkout").
+    const shipping = freeShippingApplied || courierPickerHidden
       ? 0
       : (getCurrency() === 'USD' ? convertINRtoUSD(logisticsShippingInr) : logisticsShippingInr)
     const discount = discountAmount
@@ -1644,13 +1660,31 @@ export default function Order() {
                           </Link>
                         )
                       }
+                      // India live courier: Delhivery picks the carrier/service and the
+                      // rate+ETA come from checkout, so drop the mode/days/courier/Change
+                      // and show a single neutral line.
+                      if (courierPickerHidden) {
+                        return (
+                          <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-[#efeae3] bg-[#faf7f3] px-3.5 py-2.5">
+                            <Truck className="w-4 h-4 text-[#8a807a]" />
+                            <span className="text-xs font-medium text-[#4a423c]">
+                              Shipping: <span className="font-semibold text-[#1a1a1a]">handled by our courier partner</span>
+                              <span className="text-[#b3a99f]"> · calculated at checkout</span>
+                            </span>
+                          </div>
+                        )
+                      }
                       const mode = item.transportType || (Array.isArray(cfg.transportTypes) ? cfg.transportTypes[0] : undefined)
-                      const days = mode === 'AIR' ? cfg.airDeliveryDays : cfg.shipDeliveryDays
+                      // SHIP means Surface/Road domestically (.in) and Sea internationally
+                      // (.com) — pick the matching delivery days + label for the region.
+                      const isDomestic = getRegion() === 'IN'
+                      const shipDays = isDomestic ? (cfg.surfaceDeliveryDays ?? cfg.shipDeliveryDays) : cfg.shipDeliveryDays
+                      const days = mode === 'AIR' ? cfg.airDeliveryDays : shipDays
                       return (
                         <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-[#efeae3] bg-[#faf7f3] px-3.5 py-2.5">
                           <Truck className="w-4 h-4 text-[#8a807a]" />
                           <span className="text-xs font-medium text-[#4a423c]">
-                            Shipping: <span className="font-semibold text-[#1a1a1a]">{mode === 'AIR' ? 'Air' : 'Sea'}</span>
+                            Shipping: <span className="font-semibold text-[#1a1a1a]">{mode ? transportModeLabel(mode as 'AIR' | 'SHIP', getRegion()) : '—'}</span>
                             {days ? <span className="text-[#b3a99f]"> · {days} days</span> : null}
                             {item.courier ? <span className="text-[#b3a99f]"> · </span> : null}
                             {item.courier ? <span className="font-semibold text-[#1a1a1a]">{courierName(item.courier)}</span> : null}
@@ -1805,7 +1839,9 @@ export default function Order() {
 
                     <div className="flex items-center justify-between">
                       <span className="text-[#6b625b]">Delivery charges</span>
-                      {summary.shipping === 0 ? (
+                      {courierPickerHidden ? (
+                        <span className="text-xs font-medium text-[#a1948a]">Calculated at checkout</span>
+                      ) : summary.shipping === 0 ? (
                         <span className="inline-flex items-center gap-1 font-semibold text-[#157f4a]">
                           <Truck className="h-3.5 w-3.5" /> FREE
                         </span>

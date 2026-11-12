@@ -52,15 +52,35 @@ function calculateLogistics(config, quantity, overrideTransport, region) {
     const maxWeightKg = toKg(config.maxWeight, config.weightUom);
     const exceedsMaxWeight = maxWeightKg > 0 && totalWeightKg > maxWeightKg;
 
-    // Weight-band recommendation, falling back to the first configured transport.
-    let recommendedTransport = transportTypes[0] || 'SHIP';
+    // Weight-band recommendation, region-aware. A range's transport can be:
+    //   AIR     → both markets, resolves to AIR
+    //   SEA     → international (.com) only, resolves to SHIP
+    //   SURFACE → domestic India (.in) only, resolves to SHIP
+    //   SHIP    → legacy (pre sea/surface split), applies to both, resolves to SHIP
+    // Ranges that don't apply to this market are skipped, so each market can carry
+    // its own Air↔Ship crossover weights.
+    const isDomesticMkt = String(region || '').toUpperCase() === 'IN';
+    const rangeModeForRegion = (t) => {
+        const v = String(t || '').toUpperCase();
+        if (v === 'AIR') return 'AIR';
+        if (v === 'SURFACE') return isDomesticMkt ? 'SHIP' : null;
+        if (v === 'SEA') return isDomesticMkt ? null : 'SHIP';
+        if (v === 'SHIP') return 'SHIP';
+        return null;
+    };
+    // No fallback: a mode is recommended ONLY when the order weight actually falls
+    // inside a configured range for this market. If nothing matches, there is no
+    // recommendation and the shopper chooses the shipping method themselves.
+    let recommendedTransport = null;
     for (const range of weightRanges) {
+        const mode = rangeModeForRegion(range.recommendedTransport);
+        if (mode == null) continue; // range not for this market
         if (totalWeightKg >= Number(range.minWeight) && totalWeightKg <= Number(range.maxWeight)) {
-            recommendedTransport = range.recommendedTransport;
+            recommendedTransport = mode;
             break;
         }
     }
-    // A single configured transport is not a choice — force it.
+    // A single configured transport is the only option — use it (not a fallback).
     if (transportTypes.length === 1) recommendedTransport = transportTypes[0];
 
     const selectedTransport = overrideTransport && transportTypes.includes(overrideTransport)
@@ -74,9 +94,13 @@ function calculateLogistics(config, quantity, overrideTransport, region) {
     const shipCostPerKg = isDomestic
         ? (config.surfaceCostPerKg != null ? config.surfaceCostPerKg : config.shipCostPerKg)
         : config.shipCostPerKg;
-    const shippingCostPerKg = Number(
-        selectedTransport === 'AIR' ? config.airCostPerKg : shipCostPerKg
-    ) || 0;
+    // No mode selected (weight outside every configured range, no override) → no
+    // quote. Only AIR or SHIP produce a cost.
+    const shippingCostPerKg = selectedTransport === 'AIR'
+        ? (Number(config.airCostPerKg) || 0)
+        : selectedTransport === 'SHIP'
+            ? (Number(shipCostPerKg) || 0)
+            : 0;
 
     const totalShippingCost = round2(totalWeightKg * shippingCostPerKg);
 

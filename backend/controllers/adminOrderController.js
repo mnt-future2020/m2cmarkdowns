@@ -73,6 +73,129 @@ async function refundOrderToWallet(order, actor = {}) {
     }).catch(() => {});
 }
 
+/**
+ * Earn loyalty points when an order is delivered. Idempotent (skips if already
+ * earned), gated by settings + region, excludes the points-funded portion. Shared
+ * by the manual admin status update and the courier auto-sync. Never throws.
+ */
+async function earnPointsOnDelivery(order, actor = {}) {
+    if (!order || order.pointsEarned) return;
+    try {
+        const settings = await creditPoints.getSettings();
+        if (!(settings.enabled && settings.earnOn === 'DELIVERED' && creditPoints.isActiveForRegion(settings, order.currency))) return;
+        const totalInr = order.totalAmountINR != null ? order.totalAmountINR : order.totalAmount;
+        const eligibleInr = Math.max(0, (totalInr || 0) - (order.pointsRedeemedValueINR || 0));
+        const pts = creditPoints.computeEarnedPoints(eligibleInr, settings);
+        if (pts <= 0) return;
+        const expiresAt = settings.expiryDays > 0 ? new Date(Date.now() + settings.expiryDays * 86400000) : null;
+        await creditPoints.earnPoints({
+            customerId: order.customerId,
+            points: pts,
+            source: 'ORDER_EARN',
+            valueInr: pts * (settings.redeemValuePerPointInr || 0),
+            description: `Points earned on order ${order.orderId}`,
+            refs: { orderId: order.id, orderCode: order.orderId },
+            actor: { id: actor?.id, name: actor?.name || 'System', type: actor?.type || 'system' },
+            expiresAt,
+        });
+        await prisma.order.update({ where: { id: order.id }, data: { pointsEarned: pts, pointsEarnedAt: new Date() } }).catch(() => {});
+    } catch (e) {
+        console.warn('[creditPoints earn] failed:', e?.message || e);
+    }
+}
+
+// ── Courier status → order lifecycle sync (Delhivery webhook + Track button) ──
+// Map a Delhivery status/statusType to one of our terminal/transit order statuses.
+// Returns null when the status shouldn't drive any transition (e.g. "Manifested").
+function mapCourierStatusToOrderStatus(statusStr, statusType) {
+    const s = String(statusStr || '').toLowerCase();
+    const t = String(statusType || '').toUpperCase();
+    if (t === 'DL' || s.includes('delivered')) return 'DELIVERED';
+    if (t === 'RT' || s.includes('rto') || s.includes('return')) return 'RETURNED';
+    if (s.includes('cancel')) return 'CANCELLED';
+    if (t === 'UD' || s.includes('transit') || s.includes('dispatched') || s.includes('out for delivery') || s.includes('pending')) return 'SHIPPED_TO_CUSTOMER';
+    return null; // Manifested / unknown → no lifecycle change
+}
+
+/**
+ * Apply a live-courier status to an order's lifecycle, with the SAME side effects
+ * as the manual admin flow — idempotently. Used by the Delhivery webhook and the
+ * admin "Track" button so both behave identically.
+ *   • DELIVERED  → status DELIVERED + earn points (if not already)
+ *   • RETURNED/CANCELLED (RTO/cancel) → status + refund to wallet + reverse points
+ *   • SHIPPED_TO_CUSTOMER → advance from the pre-ship stages
+ * Always records lastCourierStatus/At. Returns { changed, target }.
+ */
+async function applyCourierStatusToOrder({ order, statusStr, statusType, actor = {} }) {
+    if (!order) return { changed: false };
+    // Always cache the latest scan.
+    await prisma.order.update({
+        where: { id: order.id },
+        data: { lastCourierStatus: statusStr || null, lastCourierStatusAt: new Date() },
+    }).catch(() => {});
+
+    const target = mapCourierStatusToOrderStatus(statusStr, statusType);
+    if (!target || target === order.status) return { changed: false, target };
+
+    const TERMINAL = new Set(['DELIVERED', 'RETURNED', 'CANCELLED']);
+    // Never move backwards out of a terminal state.
+    if (TERMINAL.has(order.status)) return { changed: false, target };
+
+    const act = { id: actor?.id || null, name: actor?.name || 'Delhivery', type: actor?.type || 'system' };
+
+    if (target === 'DELIVERED') {
+        await prisma.order.update({
+            where: { id: order.id },
+            data: { status: 'DELIVERED', statusHistory: { create: { status: 'DELIVERED', updatedBy: act.id, updatedByType: act.type, comment: `Auto: Delhivery reported Delivered` } } },
+        });
+        await earnPointsOnDelivery(order, act);
+        notifyOrderStatus(order, 'DELIVERED');
+        return { changed: true, target };
+    }
+
+    if (target === 'RETURNED' || target === 'CANCELLED') {
+        await prisma.settlement.updateMany({ where: { orderId: order.id, status: { in: ['Pending', 'Processing'] } }, data: { status: 'Cancelled' } }).catch(() => {});
+        await prisma.order.update({
+            where: { id: order.id },
+            data: { status: target, statusHistory: { create: { status: target, updatedBy: act.id, updatedByType: act.type, comment: `Auto: Delhivery reported ${statusStr || target}` } } },
+        });
+        await refundOrderToWallet(order, act);
+        await reverseOrderPoints(order, act);
+        notifyOrderStatus(order, target);
+        return { changed: true, target };
+    }
+
+    if (target === 'SHIPPED_TO_CUSTOMER') {
+        // Only advance from the pre-ship hub stages; don't regress later states.
+        const SHIPPABLE_FROM = new Set(['APPROVED_BY_ADMIN_HUB', 'RECEIVED_AT_ADMIN_HUB']);
+        if (!SHIPPABLE_FROM.has(order.status)) return { changed: false, target };
+        await prisma.order.update({
+            where: { id: order.id },
+            data: { status: 'SHIPPED_TO_CUSTOMER', statusHistory: { create: { status: 'SHIPPED_TO_CUSTOMER', updatedBy: act.id, updatedByType: act.type, comment: `Auto: Delhivery reported ${statusStr || 'In Transit'}` } } },
+        });
+        notifyOrderStatus(order, 'SHIPPED_TO_CUSTOMER');
+        return { changed: true, target };
+    }
+    return { changed: false, target };
+}
+
+// Fire-and-forget customer + vendor notification for an auto status change.
+function notifyOrderStatus(order, status) {
+    try {
+        const { createNotification } = require('./notificationController');
+        const msgs = {
+            DELIVERED: { title: 'Order Delivered', message: `Your order #${order.orderId} has been delivered. Enjoy your purchase!` },
+            CANCELLED: { title: 'Order Cancelled', message: `Your order #${order.orderId} has been cancelled and a refund has been processed.` },
+            RETURNED: { title: 'Order Returned', message: `Your order #${order.orderId} has been returned and a refund has been processed.` },
+            SHIPPED_TO_CUSTOMER: { title: 'Order Shipped!', message: `Your order #${order.orderId} is on its way.` },
+        };
+        const m = msgs[status];
+        if (m && order.customerId) {
+            createNotification({ userId: order.customerId, role: 'USER', type: `ORDER_${status}`, title: m.title, message: m.message, data: { orderId: order.id } }).catch(() => {});
+        }
+    } catch { /* best-effort */ }
+}
+
 // Allowed OrderStatus values (mirrors the Prisma enum).
 const ALLOWED_ORDER_STATUSES = new Set([
     'ORDER_CREATED',
@@ -584,8 +707,10 @@ const updateAdminOrderStatus = async (req, res) => {
         const adminId = req.userId || req.adminId;
         const { id } = req.params;
         const { status, courier, trackingReference, cancelReason, restock } = req.body;
-        const courierId = courier != null ? String(courier).trim() : '';
-        const trackingId = trackingReference != null ? String(trackingReference).trim() : '';
+        // `let` because the live-courier path fills these from the order's existing
+        // Delhivery shipment (AWB) when the admin didn't type them manually.
+        let courierId = courier != null ? String(courier).trim() : '';
+        let trackingId = trackingReference != null ? String(trackingReference).trim() : '';
         const cancelReasonText = cancelReason != null ? String(cancelReason).trim() : '';
         // Cancellation no longer auto-restocks. Stock returns to inventory ONLY when
         // the admin explicitly approves it (restock === true); otherwise the units
@@ -635,20 +760,41 @@ const updateAdminOrderStatus = async (req, res) => {
 
         const nextStatus = status || order.status;
 
-        // Shipping to the customer requires the courier partner + tracking ID the
-        // admin entered in the dispatch modal, so the customer can be notified with it.
+        // Shipping to the customer requires the courier partner + tracking ID.
+        // Two paths:
+        //  • LIVE courier (Delhivery, IN orders): the AWB was already generated via
+        //    the shipment API and frozen on the order, so manual entry is DISABLED —
+        //    we take the courier + AWB straight from the order.
+        //  • MANUAL (international .com orders, or when live is off): the admin types
+        //    the courier + tracking ID in the dispatch modal as before.
         if (status === 'SHIPPED_TO_CUSTOMER') {
-            if (!courierId || !trackingId) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Courier partner and tracking ID are required to ship the order to the customer.',
-                });
-            }
-            if (!(await isCourierAvailable(courierId, order.currency, null))) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'The selected courier partner is not available.',
-                });
+            const delhivery = require('../utils/delhivery');
+            const integ = await delhivery.getIntegration();
+            const liveActive = delhivery.isLiveForRegion(integ, order.currency);
+
+            if (liveActive) {
+                if (order.shippingProvider !== 'delhivery' || !order.trackingReference) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Create the Delhivery shipment for this order before marking it shipped.',
+                    });
+                }
+                // Use the stored AWB + courier; ignore any manual values from the body.
+                trackingId = order.trackingReference;
+                courierId = courierId || order.courier || '';
+            } else {
+                if (!courierId || !trackingId) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Courier partner and tracking ID are required to ship the order to the customer.',
+                    });
+                }
+                if (!(await isCourierAvailable(courierId, order.currency, null))) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'The selected courier partner is not available.',
+                    });
+                }
             }
         }
 
@@ -794,7 +940,9 @@ const updateAdminOrderStatus = async (req, res) => {
                     status: nextStatus,
                     // Freeze the dispatch courier + tracking ID onto the order when it
                     // ships to the customer (shown to the customer + on the order pages).
-                    ...(status === 'SHIPPED_TO_CUSTOMER' ? { courier: courierId, trackingReference: trackingId } : {}),
+                    ...(status === 'SHIPPED_TO_CUSTOMER'
+                        ? { trackingReference: trackingId, ...(courierId ? { courier: courierId } : {}) }
+                        : {}),
                     // Record the admin's cancellation reason so it shows on both the
                     // admin cancellation panel and the customer's order page.
                     ...(nextStatus === 'CANCELLED' && cancelReasonText ? { cancelReason: cancelReasonText } : {}),
@@ -829,39 +977,8 @@ const updateAdminOrderStatus = async (req, res) => {
         // Earn credit points when the order reaches DELIVERED (refund-safe timing).
         // Idempotent: skip if already earned. Eligible INR excludes the points-funded
         // portion so redeemed points can't be farmed back into new points.
-        if (nextStatus === 'DELIVERED' && !order.pointsEarned) {
-            try {
-                const settings = await creditPoints.getSettings();
-                if (settings.enabled
-                    && settings.earnOn === 'DELIVERED'
-                    && creditPoints.isActiveForRegion(settings, order.currency)) {
-                    const totalInr = order.totalAmountINR != null ? order.totalAmountINR : order.totalAmount;
-                    const pointsValueInr = order.pointsRedeemedValueINR || 0;
-                    const eligibleInr = Math.max(0, (totalInr || 0) - pointsValueInr);
-                    const pts = creditPoints.computeEarnedPoints(eligibleInr, settings);
-                    if (pts > 0) {
-                        const expiresAt = settings.expiryDays > 0
-                            ? new Date(Date.now() + settings.expiryDays * 86400000)
-                            : null;
-                        await creditPoints.earnPoints({
-                            customerId: order.customerId,
-                            points: pts,
-                            source: 'ORDER_EARN',
-                            valueInr: pts * (settings.redeemValuePerPointInr || 0),
-                            description: `Points earned on order ${order.orderId}`,
-                            refs: { orderId: order.id, orderCode: order.orderId },
-                            actor: { id: req.user?.id, name: req.user?.name || 'System', type: 'system' },
-                            expiresAt,
-                        });
-                        await prisma.order.update({
-                            where: { id: order.id },
-                            data: { pointsEarned: pts, pointsEarnedAt: new Date() },
-                        }).catch(() => {});
-                    }
-                }
-            } catch (e) {
-                console.warn('[creditPoints earn] failed:', e?.message || e);
-            }
+        if (nextStatus === 'DELIVERED') {
+            await earnPointsOnDelivery(order, { id: req.user?.id, name: req.user?.name || 'System', type: 'system' });
         }
 
         // Approving a return (→ RETURNED): stop any vendor payout, mark the return
@@ -1088,4 +1205,6 @@ module.exports = {
     updateAdminOrderStatus,
     cancelAdminOrder,
     decideReturn,
+    applyCourierStatusToOrder,
+    mapCourierStatusToOrderStatus,
 };

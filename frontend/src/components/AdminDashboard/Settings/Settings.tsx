@@ -11,6 +11,7 @@ import BannerSettingsTab from "./BannerSettingsTab";
 import ExchangeRateTab from "./ExchangeRateTab";
 import EmailTemplatesTab from "./EmailTemplatesTab";
 import CreditPointsSettingsTab from "./CreditPointsSettingsTab";
+import CourierIntegrationTab from "./CourierIntegrationTab";
 import CourierManagement from "@/components/AdminDashboard/Couriers/CourierManagement";
 import DeliveryZones from "@/components/AdminDashboard/Logistics/DeliveryZones";
 import InvoiceSettings from "../Billing/Settings/InvoiceSettings";
@@ -37,6 +38,31 @@ interface UserProfile {
   zipCode: string;
 }
 
+type SettingsTabKey =
+  | "profile" | "company" | "payment" | "gst" | "hub" | "invoice" | "seo"
+  | "banner" | "vendor-notif" | "exchange-rate" | "email-templates"
+  | "couriers" | "courier" | "delivery-zones" | "credit-points";
+
+// Single source of truth for the Settings tabs — rendered as a vertical side
+// menu card (icon chip + title + subtitle). `adminOnly` tabs show only for admins.
+const SETTINGS_TABS: { key: SettingsTabKey; label: string; subtitle: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
+  { key: "profile", label: "My Account", subtitle: "Your details & password", icon: User },
+  { key: "company", label: "Company Info", subtitle: "Legal details & address", icon: Building2, adminOnly: true },
+  { key: "payment", label: "Payment Settings", subtitle: "Gateways & payouts", icon: DollarSign, adminOnly: true },
+  { key: "gst", label: "GST Settings", subtitle: "Tax rates & GSTIN", icon: Percent, adminOnly: true },
+  { key: "hub", label: "Hub Management", subtitle: "Warehouses & hubs", icon: Warehouse, adminOnly: true },
+  { key: "invoice", label: "Invoice Settings", subtitle: "Invoice document & fields", icon: FileText, adminOnly: true },
+  { key: "seo", label: "SEO Settings", subtitle: "Meta tags & sitemap", icon: Globe, adminOnly: true },
+  { key: "banner", label: "Banner", subtitle: "Homepage hero images", icon: ImageIcon, adminOnly: true },
+  { key: "vendor-notif", label: "Vendor Notifications", subtitle: "Vendor alert emails", icon: Mail, adminOnly: true },
+  { key: "exchange-rate", label: "Exchange Rate", subtitle: "Currency conversion", icon: DollarSign, adminOnly: true },
+  { key: "email-templates", label: "Email Templates", subtitle: "Customize sent emails", icon: Mail, adminOnly: true },
+  { key: "couriers", label: "Courier Partners", subtitle: "Manual courier list", icon: Truck, adminOnly: true },
+  { key: "courier", label: "Live Courier", subtitle: "Delhivery integration", icon: Truck, adminOnly: true },
+  { key: "delivery-zones", label: "Delivery Zones", subtitle: "Zones & delivery fees", icon: MapPin, adminOnly: true },
+  { key: "credit-points", label: "Credit Points", subtitle: "Loyalty rewards", icon: Gift, adminOnly: true },
+];
+
 export default function Settings() {
   const canManageSettings = hasPermission("settings:edit");
   // Simulate getting current user role - replace with actual auth
@@ -53,7 +79,7 @@ export default function Settings() {
     zipCode: "10001",
   });
 
-  const [activeTab, setActiveTab] = useState<"profile" | "company" | "payment" | "gst" | "hub" | "invoice" | "seo" | "banner" | "vendor-notif" | "exchange-rate" | "email-templates" | "couriers" | "delivery-zones" | "credit-points">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "company" | "payment" | "gst" | "hub" | "invoice" | "seo" | "banner" | "vendor-notif" | "exchange-rate" | "email-templates" | "couriers" | "delivery-zones" | "credit-points" | "courier">("profile");
 
   // Profile form state
   const [profileData, setProfileData] = useState({
@@ -625,168 +651,62 @@ export default function Settings() {
   };
 
   return (
-    <div className="p-6">
+    // Cancel the dashboard layout's own page padding (p-4 sm:p-6 lg:p-8) and
+    // apply a tighter one here, so the Settings page sits closer to the top and
+    // left than other pages without changing the shared layout for all of them.
+    <div className="-m-4 p-3 sm:-m-6 sm:p-4 lg:-m-8 lg:p-5">
 
-      <div className="mb-6">
+      <div className="mb-4">
         <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
         <p className="text-slate-600 mt-1">Manage your profile and system settings</p>
       </div>
 
-      {/* Tabs */}
-      <div className="mb-6 border-b border-slate-200">
-        <div className="flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-200 [&_button]:shrink-0 [&_button]:whitespace-nowrap">
-          <button
-            onClick={() => setActiveTab("profile")}
-            className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "profile"
-              ? "border-brand-500 text-brand-600"
-              : "border-transparent text-slate-500 hover:text-slate-700"
-              }`}
-          >
-            <User className="h-4 w-4 inline mr-2" />
-            Profile Settings
-          </button>
-          {canAccessAdminSettings && (
-            <>
+      {/* Two-column layout: vertical tab menu card on the left, panel on the right.
+          On mobile the menu becomes a horizontal-scrolling strip above the panel. */}
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        {/* Vertical tab menu */}
+        <nav className="flex gap-1.5 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:w-64 lg:shrink-0 lg:flex-col lg:gap-1 lg:self-start lg:overflow-visible lg:sticky lg:top-4 [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-200">
+          {SETTINGS_TABS.filter((t) => !t.adminOnly || canAccessAdminSettings).map((t) => {
+            const Icon = t.icon;
+            const active = activeTab === t.key;
+            return (
               <button
-                onClick={() => setActiveTab("company")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "company"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                aria-current={active ? "page" : undefined}
+                className={`group flex shrink-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors lg:w-full ${active
+                  ? "bg-brand-50"
+                  : "hover:bg-slate-50"
                   }`}
               >
-                <Building2 className="h-4 w-4 inline mr-2" />
-                Company Info
+                <span
+                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-colors ${active
+                    ? "bg-brand-500 text-white"
+                    : "bg-slate-100 text-slate-500 group-hover:bg-slate-200"
+                    }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className={`block whitespace-nowrap text-sm font-semibold lg:whitespace-normal ${active ? "text-brand-700" : "text-slate-800"}`}>
+                    {t.label}
+                  </span>
+                  <span className="hidden truncate text-xs text-slate-400 lg:block">
+                    {t.subtitle}
+                  </span>
+                </span>
               </button>
-              <button
-                onClick={() => setActiveTab("payment")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "payment"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <DollarSign className="h-4 w-4 inline mr-2" />
-                Payment Settings
-              </button>
-              <button
-                onClick={() => setActiveTab("gst")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "gst"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Percent className="h-4 w-4 inline mr-2" />
-                GST Settings
-              </button>
-              <button
-                onClick={() => setActiveTab("hub")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "hub"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Warehouse className="h-4 w-4 inline mr-2" />
-                Hub Management
-              </button>
-              <button
-                onClick={() => setActiveTab("invoice")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "invoice"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <FileText className="h-4 w-4 inline mr-2" />
-                Invoice Settings
-              </button>
-              <button
-                onClick={() => setActiveTab("seo")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "seo"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Globe className="h-4 w-4 inline mr-2" />
-                SEO Settings
-              </button>
-              <button
-                onClick={() => setActiveTab("banner")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "banner"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <ImageIcon className="h-4 w-4 inline mr-2" />
-                Banner
-              </button>
-              <button
-                onClick={() => setActiveTab("vendor-notif")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "vendor-notif"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Mail className="h-4 w-4 inline mr-2" />
-                Vendor Notifications
-              </button>
-              <button
-                onClick={() => setActiveTab("exchange-rate")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "exchange-rate"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <DollarSign className="h-4 w-4 inline mr-2" />
-                Exchange Rate
-              </button>
-              <button
-                onClick={() => setActiveTab("email-templates")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "email-templates"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Mail className="h-4 w-4 inline mr-2" />
-                Email Templates
-              </button>
-              <button
-                onClick={() => setActiveTab("couriers")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "couriers"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Truck className="h-4 w-4 inline mr-2" />
-                Courier Partners
-              </button>
-              <button
-                onClick={() => setActiveTab("delivery-zones")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "delivery-zones"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <MapPin className="h-4 w-4 inline mr-2" />
-                Delivery Zones
-              </button>
-              <button
-                onClick={() => setActiveTab("credit-points")}
-                className={`pb-3 px-1 font-medium text-sm border-b-2 transition-colors ${activeTab === "credit-points"
-                  ? "border-brand-500 text-brand-600"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-                  }`}
-              >
-                <Gift className="h-4 w-4 inline mr-2" />
-                Credit Points
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+            );
+          })}
+        </nav>
 
+        {/* Tab panel */}
+        <div className="min-w-0 flex-1">
       {/* Profile Tab */}
       {activeTab === "profile" && (
         <div className="space-y-6">
           {/* Role Badge */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-4">
                 <label
@@ -843,7 +763,7 @@ export default function Settings() {
           </Card>
 
           {/* Personal Information */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <h3 className="text-lg font-semibold text-slate-900 mb-4">Personal Information</h3>
               <form onSubmit={handleProfileUpdate}>
@@ -1076,7 +996,7 @@ export default function Settings() {
       {activeTab === "company" && canAccessAdminSettings && (
         <div className="space-y-6">
           {/* Company Logo */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-brand-100 rounded-lg">
@@ -1150,7 +1070,7 @@ export default function Settings() {
           </Card>
 
           {/* Secondary Logo — shown in the header on all other pages */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-brand-100 rounded-lg">
@@ -1224,7 +1144,7 @@ export default function Settings() {
           </Card>
 
           {/* Favicon — browser-tab icon */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-brand-100 rounded-lg">
@@ -1298,7 +1218,7 @@ export default function Settings() {
           </Card>
 
           {/* Basic Company Information */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-green-100 rounded-lg">
@@ -1417,7 +1337,7 @@ export default function Settings() {
           </Card>
 
           {/* Legal & Tax Information */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-purple-100 rounded-lg">
@@ -1486,7 +1406,7 @@ export default function Settings() {
           </Card>
 
           {/* Registered Address */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-orange-100 rounded-lg">
@@ -1609,7 +1529,7 @@ export default function Settings() {
           </Card>
 
           {/* Bank Details */}
-          <Card>
+          <Card className="rounded-2xl border border-slate-200 bg-white">
             <CardContent className="p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-indigo-100 rounded-lg">
@@ -1695,7 +1615,7 @@ export default function Settings() {
       {activeTab === "payment" && canAccessAdminSettings && (
         <div className="space-y-6">
           {loadingPaymentSettings ? (
-            <Card>
+            <Card className="rounded-2xl border border-slate-200 bg-white">
               <CardContent className="p-6">
                 <div className="flex items-center justify-center py-12">
                   <div className="text-center">
@@ -1715,7 +1635,7 @@ export default function Settings() {
               </div>
 
               {/* Razorpay Payment Gateway */}
-              <Card>
+              <Card className="rounded-2xl border border-slate-200 bg-white">
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-3">
@@ -1900,7 +1820,7 @@ export default function Settings() {
               </Card>
 
               {/* PayU Payment Gateway */}
-              <Card>
+              <Card className="rounded-2xl border border-slate-200 bg-white">
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-3">
@@ -2102,6 +2022,13 @@ export default function Settings() {
       {activeTab === "credit-points" && canAccessAdminSettings && (
         <CreditPointsSettingsTab />
       )}
+
+      {/* Live Courier (Delhivery) Integration Tab */}
+      {activeTab === "courier" && canAccessAdminSettings && (
+        <CourierIntegrationTab />
+      )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2169,7 +2096,7 @@ function VendorNotificationTab() {
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card className="rounded-2xl border border-slate-200 bg-white">
         <CardContent className="p-6">
           <div className="flex items-center gap-3 mb-4">
             <Mail className="h-5 w-5 text-slate-700" />

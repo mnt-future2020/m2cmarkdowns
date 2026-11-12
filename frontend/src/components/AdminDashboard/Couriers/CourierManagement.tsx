@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Pencil, Trash2, Truck, Loader2, X, Upload, ImageIcon } from 'lucide-react'
+import { Plus, Pencil, Trash2, Truck, Loader2, X, Upload, ImageIcon, AlertCircle } from 'lucide-react'
 import { courierService, type Courier, type CourierInput } from '@/services/courierService'
+import courierIntegrationService from '@/services/courierIntegrationService'
 import { showSuccessToast, showErrorToast } from '@/lib/toast-utils'
 import { uploadFileToCloudinary } from '@/lib/cloudinaryUpload'
 import Dropdown from '@/components/UI/Dropdown'
@@ -19,6 +20,14 @@ export default function CourierManagement() {
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Courier | null>(null)
+  const [liveActive, setLiveActive] = useState(false)
+
+  useEffect(() => {
+    courierIntegrationService
+      .getSettings()
+      .then((res) => setLiveActive(!!(res?.data?.enabled && res?.data?.connected)))
+      .catch(() => setLiveActive(false))
+  }, [])
 
   const load = async () => {
     try {
@@ -69,6 +78,16 @@ export default function CourierManagement() {
           <Plus className="w-4 h-4" /> Add Courier
         </button>
       </div>
+
+      {liveActive && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-800">
+            Live courier (Delhivery) is handling domestic India shipping. These courier partners now apply to
+            international (.com) orders and as a fallback when live courier is off.
+          </p>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-16 text-gray-400"><Loader2 className="w-6 h-6 animate-spin" /></div>
